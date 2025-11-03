@@ -33,6 +33,8 @@ Blues Zencore adalah tool backup musik dan file berbasis Rust yang dirancang unt
 
 ### Why Zencore?
 
+### Using Rust?
+-Rust is faster than Python
 ```bash
 # Python version (old):  ~30 seconds, 220 MB/s
 # Rust version (new):    ~17 seconds, 360 MB/s ⚡ +64% faster!
