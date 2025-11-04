@@ -14,6 +14,8 @@ dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 indicatif = "0.17"
 console = "0.15"
 colored = "2.1"
+pyfiglet = "0.3"  # ASCII art banners
+
 
 # Performance
 rayon = "1.10"  # Parallel processing

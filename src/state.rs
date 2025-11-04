@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ArchiveMetadata {
     pub name: String,
-    pub creted_at: String,
+    pub created_at: String,
     pub checksum: String,
     pub algorithm: String,
     pub size_bytes: u64,
     pub file_count: usize,
-    pub encypted: bool,
+    pub encrypted: bool,
 
     // List of file in the archive
     pub contents: vec<String>,
