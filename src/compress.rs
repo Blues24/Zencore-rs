@@ -1,40 +1,25 @@
-// ============================================
-// src/compress.rs - Optimized Compression with Parallelization
-// ============================================
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tar::Builder;
 use walkdir::WalkDir;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
-/// Optimized archiver with parallel file collection and compression
-///
-/// Performance improvements:
-/// - Parallel file collection using rayon
-/// - Optimized buffer sizes
-/// - Configurable compression levels
-/// - Memory-efficient streaming
 pub struct Archiver {
     source: PathBuf,
     destination: PathBuf,
     archive_name: String,
     algorithm: String,
-    /// Number of threads to use (0 = auto-detect)
     num_threads: usize,
-    /// Compression level (algorithm-specific)
     compression_level: Option<i32>,
 }
 
 impl Archiver {
-    /// Create new archiver with default settings
     pub fn new(
         source: impl AsRef<Path>,
         destination: impl AsRef<Path>,
@@ -46,57 +31,45 @@ impl Archiver {
             destination: destination.as_ref().to_path_buf(),
             archive_name,
             algorithm,
-            num_threads: 0, // Auto-detect
-            compression_level: None, // Use defaults
+            num_threads: 0,
+            compression_level: None,
         }
     }
-    
-    /// Set number of threads for parallel operations
-    /// 0 = auto-detect based on CPU cores
+
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.num_threads = threads;
         self
     }
-    
-    /// Set compression level
-    /// - tar.gz: 0-9 (6 is default)
-    /// - tar.zst: 1-22 (3 is default, 19+ is extreme)
-    /// - zip: 0-9 (6 is default)
+
     pub fn with_compression_level(mut self, level: i32) -> Self {
         self.compression_level = Some(level);
         self
     }
-    
-    /// Main compression entry point
-    ///
-    /// Returns tuple of (archive_path, list_of_files)
+
     pub fn compress(&self) -> Result<(PathBuf, Vec<String>)> {
         let archive_path = self.destination.join(&self.archive_name);
-        
-        crate::utils::ConsoleTemplate::print_info(&format!(
+
+        crate::utils::print_info(&format!(
             "Compressing with {} algorithm...",
             self.algorithm
         ));
-        
-        // Configure thread pool for parallel operations
+
         let num_threads = if self.num_threads == 0 {
-            num_cpus::get() // Auto-detect CPU cores
+            num_cpus::get()
         } else {
             self.num_threads
         };
-        
+
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build_global()
-            .ok(); // Ignore error if already initialized
-        
-        crate::utils::ConsoleTemplate::print_info(&format!("Using {} threads", num_threads));
-        
-        // Collect all files in parallel for faster scanning
+            .ok();
+
+        crate::utils::print_info(&format!("Using {} threads", num_threads));
+
         let files = self.collect_files_parallel()?;
         let total_files = files.len() as u64;
-        
-        // Create progress bar
+
         let pb = ProgressBar::new(total_files);
         pb.set_style(
             ProgressStyle::default_bar()
@@ -104,41 +77,35 @@ impl Archiver {
                 .unwrap()
                 .progress_chars("#>-"),
         );
-        
-        // Compress based on algorithm
+
         let file_list = match self.algorithm.as_str() {
             "tar.gz" => self.compress_tar_gz(&archive_path, &files, &pb)?,
             "tar.zst" => self.compress_tar_zst(&archive_path, &files, &pb)?,
             "zip" => self.compress_zip(&archive_path, &files, &pb)?,
             _ => return Err(anyhow::anyhow!("Unsupported algorithm: {}", self.algorithm)),
         };
-        
-        pb.finish_with_message("Done!");
-        
+
+        pb.finish_with_message("Done! :D");
+
         Ok((archive_path, file_list))
     }
-    
-    /// Collect files using parallel directory scanning
-    /// Much faster for directories with many files
+
     fn collect_files_parallel(&self) -> Result<Vec<PathBuf>> {
-        crate::utils::ConsoleTemplate::print_info("Scanning directory...");
-        
-        // Collect all entries in parallel
+        crate::utils::print_info("Scanning directory... please wait!");
+
         let entries: Vec<_> = WalkDir::new(&self.source)
             .into_iter()
-            .par_bridge() // Convert to parallel iterator
+            .par_bridge()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_path_buf())
             .collect();
-        
-        crate::utils::ConsoleTemplate::print_success(&format!("Found {} files", entries.len()));
-        
+
+        crate::utils::print_success(&format!("Found {} files", entries.len()));
+
         Ok(entries)
     }
-    
-    /// Compress to tar.gz format
-    /// Uses gzip compression (good compatibility)
+
     fn compress_tar_gz(
         &self,
         archive_path: &Path,
@@ -146,32 +113,28 @@ impl Archiver {
         pb: &ProgressBar,
     ) -> Result<Vec<String>> {
         let tar_gz = File::create(archive_path)?;
-        
-        // Set compression level (0-9, default 6)
+
         let level = self.compression_level.unwrap_or(6);
         let compression = Compression::new(level as u32);
-        
+
         let enc = GzEncoder::new(tar_gz, compression);
         let mut tar = Builder::new(enc);
-        
+
         let mut file_list = Vec::with_capacity(files.len());
-        
-        // Add files to archive
+
         for file_path in files {
             let relative = file_path.strip_prefix(&self.source)?;
             tar.append_path_with_name(file_path, relative)?;
-            
+
             file_list.push(relative.to_string_lossy().to_string());
             pb.inc(1);
             pb.set_message(relative.to_string_lossy().to_string());
         }
-        
+
         tar.finish()?;
         Ok(file_list)
     }
-    
-    /// Compress to tar.zst format (recommended)
-    /// Uses Zstandard compression (best speed/ratio balance)
+
     fn compress_tar_zst(
         &self,
         archive_path: &Path,
@@ -179,64 +142,55 @@ impl Archiver {
         pb: &ProgressBar,
     ) -> Result<Vec<String>> {
         let tar_zst = File::create(archive_path)?;
-        
-        // Set compression level (1-22, default 3)
-        // Level 3 is recommended: fast + good compression
-        // Level 19+ is extreme compression but very slow
         let level = self.compression_level.unwrap_or(3);
-        let enc = ZstdEncoder::new(tar_zst, level)?;
-        
-        let mut tar = Builder::new(enc.auto_finish());
-        
+        let encoder = ZstdEncoder::new(tar_zst, level)?;
+
+        let mut tar = Builder::new(encoder.auto_finish());
+
         let mut file_list = Vec::with_capacity(files.len());
-        
-        // Add files to archive
+
         for file_path in files {
             let relative = file_path.strip_prefix(&self.source)?;
             tar.append_path_with_name(file_path, relative)?;
-            
+
             file_list.push(relative.to_string_lossy().to_string());
             pb.inc(1);
             pb.set_message(relative.to_string_lossy().to_string());
         }
-        
+
         tar.finish()?;
         Ok(file_list)
     }
-    
-    /// Compress to zip format
-    /// Good for Windows compatibility
+
     fn compress_zip(
         &self,
         archive_path: &Path,
         files: &[PathBuf],
         pb: &ProgressBar,
     ) -> Result<Vec<String>> {
-        let file = File::create(archive_path)?;
-        let mut zip = zip::ZipWriter::new(file);
-        
-        // Set compression level (0-9, default 6)
+        let zip_file = File::create(archive_path)?;
+        let mut zip = zip::ZipWriter::new(zip_file);
+
         let level = self.compression_level.unwrap_or(6) as i32;
         let options = zip::write::FileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .compression_level(Some(level));
-        
+
         let mut file_list = Vec::with_capacity(files.len());
-        
-        // Add files to archive
+
         for file_path in files {
             let relative = file_path.strip_prefix(&self.source)?;
             let name = relative.to_string_lossy().to_string();
-            
+
             zip.start_file(&name, options)?;
             let mut f = File::open(file_path)?;
             io::copy(&mut f, &mut zip)?;
-            
+
             file_list.push(name.clone());
             pb.inc(1);
             pb.set_message(name);
         }
-        
+
         zip.finish()?;
         Ok(file_list)
     }

@@ -222,6 +222,7 @@ dependencies = [
  "console",
  "dialoguer",
  "directories",
+ "dirs",
  "figlet-rs",
  "flate2",
  "ignore",

@@ -58,6 +58,7 @@ thiserror = "1.0"
 chrono = "0.4"
 directories = "5.0"  # XDG directories support
 shellexpand = "3.1"  # Tilde expansion for paths
+dirs = "6.0.0"
 
 [dev-dependencies]
 tempfile = "3.10"
