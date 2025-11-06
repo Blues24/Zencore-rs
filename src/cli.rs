@@ -10,7 +10,7 @@ use std::fs;
 
 use crate::{
     archive_name::ArchiveNamer, compress::Archiver, config::Config, crypto::{Checker, Encryptor},
-    fuzzer::Fuzzer, state::{ArchiveMetadata, StateTracker}, utils,
+    fuzzer::Fuzzer, state::{ArchiveMetadata, StateTracker}, utils::ConsoleTemplate,
 };
 
 #[derive(Parser)]
@@ -109,8 +109,8 @@ impl Cli {
                 // Validate path exists
                 let expanded = shellexpand::tilde(path).to_string();
                 if !std::path::Path::new(&expanded).exists() {
-                    utils::print_warning(&format!("Path not found: {}", path));
-                    utils::print_info("Falling back to interactive selection...");
+                    ConsoleTemplate::print_warning(&format!("Path not found: {}", path));
+                    ConsoleTemplate::print_info("Falling back to interactive selection...");
                     let selected = Fuzzer::find_and_select(&config.music_folders, "music")?;
                     selected.to_string_lossy().to_string()
                 } else {
@@ -122,8 +122,8 @@ impl Cli {
                 match Fuzzer::find_and_select(&config.music_folders, "music") {
                     Ok(selected) => selected.to_string_lossy().to_string(),
                     Err(_) => {
-                        utils::print_warning("No music folders found in config paths");
-                        utils::print_info("Please enter source path manually:");
+                        ConsoleTemplate::print_warning("No music folders found in config paths");
+                        ConsoleTemplate::print_info("Please enter source path manually:");
                         
                         let manual_path = dialoguer::Input::<String>::new()
                             .with_prompt("Source folder")
@@ -147,7 +147,7 @@ impl Cli {
                 // User explicitly provided destination
                 let expanded = shellexpand::tilde(path).to_string();
                 if !std::path::Path::new(&expanded).exists() {
-                    utils::print_warning(&format!("Path not found: {}", path));
+                    ConsoleTemplate::print_warning(&format!("Path not found: {}", path));
                     
                     let create = Confirm::with_theme(&ColorfulTheme::default())
                         .with_prompt("Create destination folder?")
@@ -156,7 +156,7 @@ impl Cli {
                     
                     if create {
                         fs::create_dir_all(&expanded)?;
-                        utils::print_success(&format!("Created: {}", expanded));
+                        ConsoleTemplate::print_success(&format!("Created: {}", expanded));
                         expanded
                     } else {
                         return Err(anyhow::anyhow!("Destination folder required"));
@@ -183,7 +183,7 @@ impl Cli {
                         // Ensure it exists
                         if !std::path::Path::new(&default_dest).exists() {
                             fs::create_dir_all(&default_dest)?;
-                            utils::print_success(&format!("Created: {}", default_dest));
+                            ConsoleTemplate::print_success(&format!("Created: {}", default_dest));
                         }
                         default_dest
                     } else {
@@ -205,7 +205,7 @@ impl Cli {
                 // Validate algorithm
                 let normalized = a.to_lowercase();
                 if !["tar.gz", "tar.zst", "zip"].contains(&normalized.as_str()) {
-                    utils::print_warning(&format!("Unknown algorithm: {}", a));
+                    ConsoleTemplate::print_warning(&format!("Unknown algorithm: {}", a));
                     Self::select_algorithm_interactive()?
                 } else {
                     normalized
@@ -226,10 +226,10 @@ impl Cli {
         );
         let archive_name = namer.generate()?;
 
-        utils::print_info(&format!("📦 Archive name: {}", archive_name));
-        utils::print_info(&format!("📁 Source: {}", source_path));
-        utils::print_info(&format!("💾 Destination: {}", dest_path));
-        utils::print_info(&format!("🔧 Algorithm: {}", algo));
+        ConsoleTemplate::print_info(&format!("📦 Archive name: {}", archive_name));
+        ConsoleTemplate::print_info(&format!("📁 Source: {}", source_path));
+        ConsoleTemplate::print_info(&format!("💾 Destination: {}", dest_path));
+        ConsoleTemplate::print_info(&format!("🔧 Algorithm: {}", algo));
         
         // Confirmation prompt for safety
         let proceed = Confirm::with_theme(&ColorfulTheme::default())
@@ -238,7 +238,7 @@ impl Cli {
             .interact()?;
         
         if !proceed {
-            utils::print_info("Backup cancelled");
+            ConsoleTemplate::print_info("Backup cancelled");
             return Ok(());
         }
 
@@ -246,15 +246,15 @@ impl Cli {
         let archiver = Archiver::new(&source_path, &dest_path, archive_name.clone(), algo.clone());
         let (archive_path, file_list) = archiver.compress()?;
 
-        utils::print_success(&format!(
+        ConsoleTemplate::print_success(&format!(
             "Compressed to: {}",
             archive_path.display()
         ));
 
         // 6. Generate checksum
-        utils::print_info("Generating SHA-256 checksum...");
+        ConsoleTemplate::print_info("Generating SHA-256 checksum...");
         let checksum = Checker::generate_checksum(archive_path.to_str().unwrap())?;
-        utils::print_success(&format!("Checksum: {}", checksum));
+        ConsoleTemplate::print_success(&format!("Checksum: {}", checksum));
 
         // 7. Encrypt if requested with fallback
         let encrypted = if encrypt {
@@ -324,9 +324,9 @@ impl Cli {
         state.add_archive(metadata);
         state.save()?;
 
-        utils::print_success("✓ Backup completed successfully!");
-        utils::print_info(&format!("Files backed up: {}", metadata.file_count));
-        utils::print_info(&format!(
+        ConsoleTemplate::print_success("✓ Backup completed successfully!");
+        ConsoleTemplate::print_info(&format!("Files backed up: {}", metadata.file_count));
+        ConsoleTemplate::print_info(&format!(
             "Archive size: {:.2} MB",
             file_size as f64 / 1_048_576.0
         ));
@@ -339,7 +339,7 @@ impl Cli {
         let archives = state.list_archives();
 
         if archives.is_empty() {
-            utils::print_warning("No archives found. Create one with 'zencore backup'");
+            ConsoleTemplate::print_warning("No archives found. Create one with 'zencore backup'");
             return Ok(());
         }
 
@@ -396,10 +396,10 @@ impl Cli {
     }
 
     fn run_verify(&self, archive: &str) -> Result<()> {
-        utils::print_info("🔍 Verifying archive integrity...");
+        ConsoleTemplate::print_info("🔍 Verifying archive integrity...");
 
         let checksum = Checker::generate_checksum(archive)?;
-        utils::print_success(&format!("Checksum: {}", checksum));
+        ConsoleTemplate::print_success(&format!("Checksum: {}", checksum));
 
         // Check against state if available
         let archive_name = std::path::Path::new(archive)
@@ -410,12 +410,12 @@ impl Cli {
         let state = StateTracker::load()?;
         if let Some(metadata) = state.get_archive(archive_name) {
             if Checker::verify_checksum(archive, &metadata.checksum)? {
-                utils::print_success("✓ Checksum matches! Archive is intact.");
+                ConsoleTemplate::print_success("✓ Checksum matches! Archive is intact.");
             } else {
-                utils::print_error("✗ Checksum mismatch! Archive may be corrupted.");
+                ConsoleTemplate::print_error("✗ Checksum mismatch! Archive may be corrupted.");
             }
         } else {
-            utils::print_warning("No stored checksum found for comparison.");
+            ConsoleTemplate::print_warning("No stored checksum found for comparison.");
         }
 
         Ok(())
@@ -436,7 +436,7 @@ impl Cli {
             println!("  Date format:       {}", config.date_format);
             println!("  Encrypt by default: {}", config.encrypt_by_default);
         } else {
-            utils::print_warning("Config file doesn't exist yet. Will be created on first backup.");
+            ConsoleTemplate::print_warning("Config file doesn't exist yet. Will be created on first backup.");
         }
 
         println!();
@@ -472,7 +472,7 @@ impl Cli {
                 let archives = state.list_archives();
 
                 if archives.is_empty() {
-                    utils::print_warning("No archives found");
+                    ConsoleTemplate::print_warning("No archives found");
                     return Ok(());
                 }
 
@@ -486,7 +486,7 @@ impl Cli {
                 self.run_show(&names[selection])
             }
             _ => {
-                utils::print_info("Goodbye! 👋");
+                ConsoleTemplate::print_info("Goodbye! 👋");
                 Ok(())
             }
         }
@@ -497,15 +497,15 @@ impl Cli {
     // ==========================================
     
     fn select_destination_interactive(config: &Config) -> Result<String> {
-        utils::print_info("💾 Where do you want to save the backup?");
+        ConsoleTemplate::print_info("💾 Where do you want to save the backup?");
         
         match Fuzzer::find_and_select(&config.backup_folders, "backups") {
             Ok(selected) => {
                 Ok(selected.to_string_lossy().to_string())
             }
             Err(_) => {
-                utils::print_warning("No backup folders found");
-                utils::print_info("Enter destination path manually:");
+                ConsoleTemplate::print_warning("No backup folders found");
+                ConsoleTemplate::print_info("Enter destination path manually:");
                 
                 let manual_path = dialoguer::Input::<String>::new()
                     .with_prompt("Destination folder")
@@ -521,7 +521,7 @@ impl Cli {
                     
                     if create {
                         fs::create_dir_all(&expanded)?;
-                        utils::print_success(&format!("Created: {}", expanded));
+                        ConsoleTemplate::print_success(&format!("Created: {}", expanded));
                     } else {
                         return Err(anyhow::anyhow!("Destination folder required"));
                     }
@@ -533,7 +533,7 @@ impl Cli {
     }
     
     fn select_algorithm_interactive() -> Result<String> {
-        utils::print_info("📦 Select compression algorithm:");
+        ConsoleTemplate::print_info("📦 Select compression algorithm:");
         
         let algorithms = vec![
             ("tar.zst (Recommended)", "tar.zst", "⚡ Fast & High compression"),

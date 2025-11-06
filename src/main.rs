@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     
     // Show application banner
-    utils::show_banner();
+    utils::ConsoleTemplate::show_banner();
     
     // Run the CLI command
     cli.run()

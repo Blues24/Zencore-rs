@@ -1,3 +1,8 @@
+// ============================================
+use anyhow::anyhow;
+// src/crypto_extended.rs - Extended Crypto Support
+// ============================================
+
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce as AesNonce,
@@ -17,31 +22,30 @@ use sha3::Sha3_256;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 
-
+/// Supported encryption algorithms
 #[derive(Debug, Clone, Copy)]
-pub enum CipherAlgorithm{
-    // AES-256-GCM (Default, Hardware accelerated on modern CPUs)
+pub enum CipherAlgorithm {
+    /// AES-256-GCM (Default, Hardware accelerated on modern CPUs)
     Aes256Gcm,
     /// ChaCha20-Poly1305 (Pure software, constant-time, good for older CPUs)
-    ChaCha20Poly1305
+    ChaCha20Poly1305,
 }
 
 impl CipherAlgorithm {
-    pub fn from_str(s: &str) -> Result<Self>{
-        match s.to_lowercase().to_str(){
-            "aes-256" | "aes256" | "aes" => Ok(CipherAlgorithm::Aes256Gcm),
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "aes256" | "aes-256" | "aes" => Ok(CipherAlgorithm::Aes256Gcm),
             "chacha20" | "chacha" => Ok(CipherAlgorithm::ChaCha20Poly1305),
             _ => Err(anyhow::anyhow!("Unknown cipher: {}", s)),
         }
     }
-
+    
     pub fn name(&self) -> &str {
         match self {
             CipherAlgorithm::Aes256Gcm => "AES-256-GCM",
             CipherAlgorithm::ChaCha20Poly1305 => "ChaCha20-Poly1305",
         }
     }
-
 }
 
 /// Supported hash algorithms for checksums
@@ -114,7 +118,7 @@ impl AdvancedEncryptor {
     ///
     /// File format: [version(1)][cipher_id(1)][salt(22)][nonce(12)][ciphertext]
     pub fn encrypt_file(&self, file_path: &str) -> Result<String> {
-        crate::utils::print_info(&format!("Encrypting with {}...", self.cipher.name()));
+        crate::utils::ConsoleTemplate::print_info(&format!("Encrypting with {}...", self.cipher.name()));
         
         // Read plaintext
         let plaintext = fs::read(file_path)?;
@@ -129,7 +133,7 @@ impl AdvancedEncryptor {
                 let cipher = Aes256Gcm::new_from_slice(&key)?;
                 let mut nonce_bytes = [0u8; 12];
                 OsRng.fill_bytes(&mut nonce_bytes);
-                let nonce = AesNonce::from_slice(&nonce_bytes);
+                let nonce = AesNonce::clone_from_slice(&nonce_bytes);
                 
                 let ciphertext = cipher
                     .encrypt(nonce, plaintext.as_ref())
@@ -142,7 +146,7 @@ impl AdvancedEncryptor {
                 let cipher = ChaCha20Poly1305::new_from_slice(&key)?;
                 let mut nonce_bytes = [0u8; 12];
                 OsRng.fill_bytes(&mut nonce_bytes);
-                let nonce = ChachaNonce::from_slice(&nonce_bytes);
+                let nonce = ChachaNonce::clone_from_slice(&nonce_bytes);
                 
                 let ciphertext = cipher
                     .encrypt(nonce, plaintext.as_ref())
@@ -178,7 +182,7 @@ impl AdvancedEncryptor {
         // Ciphertext
         encrypted_file.write_all(&ciphertext)?;
         
-        crate::utils::print_success(&format!("Encrypted with {}", self.cipher.name()));
+        crate::utils::ConsoleTemplate::print_success(&format!("Encrypted with {}", self.cipher.name()));
         
         Ok(file_path.to_string())
     }
@@ -204,7 +208,7 @@ impl AdvancedEncryptor {
             _ => return Err(anyhow::anyhow!("Unknown cipher ID: {}", cipher_id)),
         };
         
-        crate::utils::print_info(&format!("Detected cipher: {}", detected_cipher.name()));
+        crate::utils::ConsoleTemplate::print_info(&format!("Detected cipher: {}", detected_cipher.name()));
         
         let salt_str = std::str::from_utf8(&encrypted_data[2..24])?;
         let nonce_bytes = &encrypted_data[24..36];
@@ -227,7 +231,7 @@ impl AdvancedEncryptor {
         let plaintext = match detected_cipher {
             CipherAlgorithm::Aes256Gcm => {
                 let cipher = Aes256Gcm::new_from_slice(&key)?;
-                let nonce = AesNonce::from_slice(nonce_bytes);
+                let nonce = AesNonce::clone_from_slice(nonce_bytes);
                 
                 cipher
                     .decrypt(nonce, ciphertext)
@@ -235,7 +239,7 @@ impl AdvancedEncryptor {
             }
             CipherAlgorithm::ChaCha20Poly1305 => {
                 let cipher = ChaCha20Poly1305::new_from_slice(&key)?;
-                let nonce = ChachaNonce::from_slice(nonce_bytes);
+                let nonce = ChachaNonce::clone_from_slice(nonce_bytes);
                 
                 cipher
                     .decrypt(nonce, ciphertext)
@@ -246,7 +250,7 @@ impl AdvancedEncryptor {
         // Write decrypted file
         fs::write(file_path, plaintext)?;
         
-        crate::utils::print_success("File decrypted successfully");
+        crate::utils::ConsoleTemplate::print_success("File decrypted successfully");
         
         Ok(file_path.to_string())
     }

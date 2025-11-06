@@ -3,7 +3,7 @@
 // ============================================
 
 use colored::*;
-use pyfiglet::FIGfont;
+use figlet_rs::FIGfont;
 use std::io::{self, Write};
 use std::time::Duration;
 
