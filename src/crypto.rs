@@ -17,10 +17,14 @@ use std::io::{BufReader, Read, Write};
 #[derive(Debug, Clone, Copy)]
 pub enum CipherAlgorithm {
     Aes256Gcm,
+
+    #[warn(deprecated)]
     ChaCha20Poly1305,
 }
 
 impl CipherAlgorithm {
+    
+    #[warn(dead_code)]
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "aes-256" | "aes256" | "aes" => Ok(CipherAlgorithm::Aes256Gcm),
@@ -40,11 +44,15 @@ impl CipherAlgorithm {
 #[derive(Debug, Clone, Copy)]
 pub enum HashAlgorithm {
     Sha256,
+
+    #[warn(dead_code)]
     Sha3_256,
+    #[warn(dead_code)]
     Blake3,
 }
 
 impl HashAlgorithm {
+    #[warn(dead_code)]
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "sha256" | "sha-256" => Ok(HashAlgorithm::Sha256),
@@ -53,7 +61,7 @@ impl HashAlgorithm {
             _ => Err(anyhow::anyhow!("Unknown hash algorithm: {}", s)),
         }
     }
-
+    #[warn(dead_code)]
     pub fn name(&self) -> &str {
         match self {
             HashAlgorithm::Sha256 => "SHA-256",
@@ -75,7 +83,8 @@ impl Encryptor {
             cipher: CipherAlgorithm::Aes256Gcm,
         }
     }
-
+    
+    #[warn(dead_code)]
     pub fn with_cipher(password: String, cipher: CipherAlgorithm) -> Self {
         Self { password, cipher }
     }
@@ -148,6 +157,7 @@ impl Encryptor {
         Ok(file_path.to_string())
     }
 
+    #[warn(dead_code)]
     pub fn decrypt_file(&self, file_path: &str) -> Result<String> {
         let encrypted_data = fs::read(file_path)?;
 

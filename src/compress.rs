@@ -4,7 +4,7 @@ use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use tar::Builder;
 use walkdir::WalkDir;
@@ -36,11 +36,13 @@ impl Archiver {
         }
     }
 
+    #[warn(dead_code)]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.num_threads = threads;
         self
     }
 
+    #[warn(dead_code)]
     pub fn with_compression_level(mut self, level: i32) -> Self {
         self.compression_level = Some(level);
         self
