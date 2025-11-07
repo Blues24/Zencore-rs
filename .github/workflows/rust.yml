@@ -3,7 +3,7 @@ name: Rust Release
 on:
   push:
     tags:
-      - 'v*.*-*'   # contoh: v1.0.0-sakura
+      - 'v*-*'   # contoh: v1.0.0-sakura
 
 jobs:
   build:
