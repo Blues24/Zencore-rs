@@ -1,9 +1,10 @@
-name: Rust Release
+name: Zencore Release
 
 on:
   push:
     tags:
-      - 'v*-*'   # contoh: v1.0.0-sakura
+      - 'v*-*'   # contoh: v1.0-Noble, v1.0.0-Sakura, v2-Beta
+  workflow_dispatch:  # 🔹 memungkinkan trigger manual dari GitHub UI
 
 jobs:
   build:
@@ -35,7 +36,7 @@ jobs:
       - name: Move built binary to artifacts and compress
         run: |
           BIN_NAME="${{ steps.binname.outputs.bin_name }}"
-          VERSION="${{ github.ref_name }}"
+          VERSION="${{ github.ref_name || 'manual-run' }}" # kalau manual run, gunakan label default
           echo "Copying binary: target/release/$BIN_NAME"
           if [ -f "target/release/$BIN_NAME" ]; then
             cp "target/release/$BIN_NAME" "artifacts/"
@@ -53,14 +54,14 @@ jobs:
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
-          VERSION=${{ github.ref_name }}
+          VERSION=${{ github.ref_name || 'manual-run' }}
           sha256sum * > checksums-${VERSION}.txt
           cat checksums-${VERSION}.txt
 
       - name: Upload all artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}-${{ github.ref_name }}
+          name: ${{ github.event.repository.name }}-${{ github.ref_name || 'manual-run' }}
           path: artifacts/*
 
   release:
@@ -72,10 +73,11 @@ jobs:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}-${{ github.ref_name }}
+          name: ${{ github.event.repository.name }}-${{ github.ref_name || 'manual-run' }}
           path: artifacts
 
       - name: Create GitHub Release
+        if: github.ref_type == 'tag'  # hanya buat release kalau ini benar-benar tag
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
