@@ -1,4 +1,4 @@
-name: Rust Release
+name: Zencore-rs linux Release
 
 on:
   create:
@@ -29,7 +29,7 @@ jobs:
           override: true
 
       - name: Build project
-        run: cargo build --release --locked
+        run: cargo build --release --locked -Awarnings
 
       - name: Determine binary name
         id: binname
@@ -42,7 +42,7 @@ jobs:
 
       - name: Move binary and compress
         run: |
-          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          BIN_NAME="zencore"
           VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           cp "target/release/$BIN_NAME" "artifacts/"
           cd artifacts
