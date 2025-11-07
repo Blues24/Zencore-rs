@@ -1,10 +1,15 @@
-name: Zencore Release
+name: Rust Release
 
 on:
-  push:
+  create:
     tags:
-      - 'v1.0-Noble'   # contoh: v1.0-Noble, v1.0.0-Sakura, v2-Beta
-  workflow_dispatch:  # 🔹 memungkinkan trigger manual dari GitHub UI
+      - 'v*'   # contoh: v1.0.0, v1.0-Noble, v2.1-Beta
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag yang ingin dibuild (misalnya v1.0.0-Noble)"
+        required: true
+        default: "v1.0.0-manual"
 
 jobs:
   build:
@@ -14,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -21,7 +28,7 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Build project (release mode)
+      - name: Build project
         run: cargo build --release --locked
 
       - name: Determine binary name
@@ -30,22 +37,14 @@ jobs:
           BIN_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
           echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
 
-      - name: Prepare artifacts directory
+      - name: Prepare artifacts
         run: mkdir -p artifacts
 
-      - name: Move built binary to artifacts and compress
+      - name: Move binary and compress
         run: |
           BIN_NAME="${{ steps.binname.outputs.bin_name }}"
-          VERSION="${{ github.ref_name || 'manual-run' }}" # kalau manual run, gunakan label default
-          echo "Copying binary: target/release/$BIN_NAME"
-          if [ -f "target/release/$BIN_NAME" ]; then
-            cp "target/release/$BIN_NAME" "artifacts/"
-          else
-            echo "❌ Binary not found! Listing target/release:"
-            ls -l target/release
-            exit 1
-          fi
-
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          cp "target/release/$BIN_NAME" "artifacts/"
           cd artifacts
           zip ${BIN_NAME}-${VERSION}.zip $BIN_NAME
           tar -czf ${BIN_NAME}-${VERSION}.tar.gz $BIN_NAME
@@ -54,33 +53,34 @@ jobs:
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
-          VERSION=${{ github.ref_name || 'manual-run' }}
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           sha256sum * > checksums-${VERSION}.txt
           cat checksums-${VERSION}.txt
 
-      - name: Upload all artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}-${{ github.ref_name || 'manual-run' }}
+          name: ${{ github.event.repository.name }}-${{ github.event.inputs.tag || github.ref_name }}
           path: artifacts/*
 
   release:
-    name: Publish GitHub Release
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download artifact from build job
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}-${{ github.ref_name || 'manual-run' }}
+          name: ${{ github.event.repository.name }}-${{ github.event.inputs.tag || github.ref_name }}
           path: artifacts
 
-      - name: Create GitHub Release
-        if: github.ref_type == 'tag'  # hanya buat release kalau ini benar-benar tag
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Release ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
