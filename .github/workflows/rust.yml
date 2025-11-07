@@ -9,7 +9,7 @@ on:
       tag:
         description: "Tag yang ingin dibuild (misalnya v1.0.0-Noble)"
         required: true
-        default: "v1.0.0-manual"
+        default: "v1.0-manual"
 
 jobs:
   build:
@@ -29,7 +29,7 @@ jobs:
           override: true
 
       - name: Build project
-        run: cargo build --release --locked -Awarnings
+        run: cargo build --release --locked 
 
       - name: Determine binary name
         id: binname
