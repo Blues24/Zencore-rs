@@ -3,7 +3,7 @@ name: Zencore Release
 on:
   push:
     tags:
-      - 'v*-*'   # contoh: v1.0-Noble, v1.0.0-Sakura, v2-Beta
+      - 'v1.0-Noble'   # contoh: v1.0-Noble, v1.0.0-Sakura, v2-Beta
   workflow_dispatch:  # 🔹 memungkinkan trigger manual dari GitHub UI
 
 jobs:
