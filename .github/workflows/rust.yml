@@ -1,0 +1,86 @@
+name: Zencore-rs Release
+
+on:
+  push:
+    tags:
+      - 'V*.*.*-*'   # contoh: V1.0.0-sakura
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build project (release mode)
+        run: cargo build --release
+
+      - name: Prepare artifacts directory
+        run: mkdir -p artifacts
+
+      - name: Package binary
+        run: |
+          BIN_NAME=${{ github.event.repository.name }}
+          VERSION=${{ github.ref_name }}
+
+          cp target/release/$BIN_NAME artifacts/
+          cd artifacts
+
+          # Create compressed archives of the binary
+          zip ${BIN_NAME}-${VERSION}.zip $BIN_NAME
+          tar -czf ${BIN_NAME}-${VERSION}.tar.gz $BIN_NAME
+          tar -cJf ${BIN_NAME}-${VERSION}.tar.xz $BIN_NAME
+
+      - name: Download source archives
+        run: |
+          REPO=${{ github.repository }}
+          VERSION=${{ github.ref_name }}
+          mkdir -p artifacts
+
+          curl -L -o artifacts/source-${VERSION}.zip \
+            https://github.com/${REPO}/archive/refs/tags/${VERSION}.zip
+          curl -L -o artifacts/source-${VERSION}.tar.gz \
+            https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.gz
+          curl -L -o artifacts/source-${VERSION}.tar.xz \
+            https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.xz
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          VERSION=${{ github.ref_name }}
+          sha256sum * > checksums-${VERSION}.txt
+          cat checksums-${VERSION}.txt
+
+      - name: Upload all artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.ref_name }}
+          path: artifacts/*
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.ref_name }}
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
