@@ -28,16 +28,10 @@ jobs:
       - name: Build (Linux)
         run: cargo build --release --locked
 
-      - name: Get binary name
-        id: binname
-        run: |
-          BIN_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
-          echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
-
       - name: Package artifacts (Linux)
         run: |
           mkdir -p artifacts
-          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          BIN_NAME="zencore"
           VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           cp "target/release/$BIN_NAME" "artifacts/"
           cd artifacts
@@ -73,16 +67,10 @@ jobs:
       - name: Build (Windows)
         run: cargo build --release --target x86_64-pc-windows-gnu --locked
 
-      - name: Get binary name
-        id: binname
-        run: |
-          BIN_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
-          echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
-
       - name: Package artifacts (Windows)
         run: |
           mkdir -p artifacts
-          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          BIN_NAME="zencore"
           VERSION="${{ github.event.inputs.tag || github.ref_name }}"
           cp "target/x86_64-pc-windows-gnu/release/${BIN_NAME}.exe" "artifacts/"
           cd artifacts
