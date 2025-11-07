@@ -1,13 +1,13 @@
-name: Zencore-rs Release
+name: Rust Release
 
 on:
   push:
     tags:
-      - 'V*.*.*-*'   # contoh: V1.0.0-sakura
+      - 'v*.*.*-*'   # contoh: v1.0.0-sakura
 
 jobs:
   build:
-    name: Build and package
+    name: Build and package binary
     runs-on: ubuntu-latest
 
     steps:
@@ -21,36 +21,34 @@ jobs:
           override: true
 
       - name: Build project (release mode)
-        run: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Determine binary name
+        id: binname
+        run: |
+          BIN_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].name')
+          echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
 
       - name: Prepare artifacts directory
         run: mkdir -p artifacts
 
-      - name: Package binary
+      - name: Move built binary to artifacts and compress
         run: |
-          BIN_NAME=${{ github.event.repository.name }}
-          VERSION=${{ github.ref_name }}
+          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          VERSION="${{ github.ref_name }}"
+          echo "Copying binary: target/release/$BIN_NAME"
+          if [ -f "target/release/$BIN_NAME" ]; then
+            cp "target/release/$BIN_NAME" "artifacts/"
+          else
+            echo "❌ Binary not found! Listing target/release:"
+            ls -l target/release
+            exit 1
+          fi
 
-          cp target/release/$BIN_NAME artifacts/
           cd artifacts
-
-          # Create compressed archives of the binary
           zip ${BIN_NAME}-${VERSION}.zip $BIN_NAME
           tar -czf ${BIN_NAME}-${VERSION}.tar.gz $BIN_NAME
           tar -cJf ${BIN_NAME}-${VERSION}.tar.xz $BIN_NAME
-
-      - name: Download source archives
-        run: |
-          REPO=${{ github.repository }}
-          VERSION=${{ github.ref_name }}
-          mkdir -p artifacts
-
-          curl -L -o artifacts/source-${VERSION}.zip \
-            https://github.com/${REPO}/archive/refs/tags/${VERSION}.zip
-          curl -L -o artifacts/source-${VERSION}.tar.gz \
-            https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.gz
-          curl -L -o artifacts/source-${VERSION}.tar.xz \
-            https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.xz
 
       - name: Generate SHA256 checksums
         run: |
