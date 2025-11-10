@@ -6,7 +6,7 @@ use std::fs;
 
 use crate::{
     archive_name::ArchiveNamer, compress::Archiver, config::Config, 
-    crypto::{Checker, Encryptor, HashAlgorithm},
+    crypto::{Checker, Encryptor},
     fuzzer::Fuzzer, state::{ArchiveMetadata, StateTracker}, utils,
 };
 
@@ -39,6 +39,7 @@ enum Commands {
     Verify { archive: String },
     Config,
 }
+
 impl Cli {
     pub fn run(&self) -> Result<()> {
         match &self.command {
@@ -53,7 +54,7 @@ impl Cli {
         }
     }
 
-    pub fn run_backup(
+    fn run_backup(
         &self,
         source: &Option<String>,
         destination: &Option<String>,
@@ -177,8 +178,12 @@ impl Cli {
         utils::print_success(&format!("Compressed to: {}", archive_path.display()));
 
         utils::print_info("Generating SHA-256 checksum...");
-        let checksum = Checker::generate_checksum(archive_path.to_str().unwrap(), HashAlgorithm::Sha256)?;
+        let checksum = Checker::generate_checksum(archive_path.to_str().unwrap())?;
         utils::print_success(&format!("Checksum: {}", checksum));
+
+        if config.generate_checksum_file {
+            Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+        }
 
         let encrypted = if encrypt {
             let password = Password::with_theme(&ColorfulTheme::default())
@@ -188,6 +193,12 @@ impl Cli {
 
             let encryptor = Encryptor::new(password);
             encryptor.encrypt_file(archive_path.to_str().unwrap())?;
+            
+            if config.generate_checksum_file {
+                utils::print_info("Updating checksum for encrypted archive...");
+                Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+            }
+            
             true
         } else if config.encrypt_by_default {
             let should_encrypt = Confirm::with_theme(&ColorfulTheme::default())
@@ -203,6 +214,12 @@ impl Cli {
 
                 let encryptor = Encryptor::new(password);
                 encryptor.encrypt_file(archive_path.to_str().unwrap())?;
+                
+                if config.generate_checksum_file {
+                    utils::print_info("Updating checksum for encrypted archive...");
+                    Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+                }
+                
                 true
             } else {
                 false
@@ -221,11 +238,27 @@ impl Cli {
 
                 let encryptor = Encryptor::new(password);
                 encryptor.encrypt_file(archive_path.to_str().unwrap())?;
+                
+                if config.generate_checksum_file {
+                    utils::print_info("Updating checksum for encrypted archive...");
+                    Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+                }
+                
                 true
             } else {
                 false
             }
         };
+
+        if config.verify_after_backup {
+            utils::print_info("🔍 Verifying backup integrity...");
+            if Checker::auto_verify(archive_path.to_str().unwrap())? {
+                utils::print_success("✓ Backup verified successfully!");
+            } else {
+                utils::print_error("✗ Backup verification failed!");
+                return Err(anyhow::anyhow!("Backup verification failed"));
+            }
+        }
 
         let file_size = fs::metadata(&archive_path)?.len();
         let metadata = ArchiveMetadata {
@@ -238,20 +271,20 @@ impl Cli {
             encrypted,
             contents: file_list,
         };
-        let cloned_metadata = metadata.clone();
         
+        let metadata_clone = metadata.clone();
         let mut state = StateTracker::load()?;
         state.add_archive(metadata);
         state.save()?;
-        
+
         utils::print_success("✓ Backup completed successfully!");
-        utils::print_info(&format!("Files backed up: {}", cloned_metadata.file_count));
+        utils::print_info(&format!("Files backed up: {}", metadata_clone.file_count));
         utils::print_info(&format!("Archive size: {:.2} MB", file_size as f64 / 1_048_576.0));
 
         Ok(())
     }
 
-    pub fn run_list(&self) -> Result<()> {
+    fn run_list(&self) -> Result<()> {
         let state = StateTracker::load()?;
         let archives = state.list_archives();
 
@@ -275,7 +308,7 @@ impl Cli {
         Ok(())
     }
 
-    pub fn run_show(&self, name: &str) -> Result<()> {
+    fn run_show(&self, name: &str) -> Result<()> {
         let state = StateTracker::load()?;
         let archive = state.get_archive(name).context("Archive not found in state")?;
 
@@ -302,32 +335,46 @@ impl Cli {
         Ok(())
     }
 
-    pub fn run_verify(&self, archive: &str) -> Result<()> {
+    fn run_verify(&self, archive: &str) -> Result<()> {
         utils::print_info("🔍 Verifying archive integrity...");
 
-        let checksum = Checker::generate_checksum(archive, HashAlgorithm::Sha256)?;
-        utils::print_success(&format!("Checksum: {}", checksum));
-
-        let archive_name = std::path::Path::new(archive)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .context("Invalid archive path")?;
-
-        let state = StateTracker::load()?;
-        if let Some(metadata) = state.get_archive(archive_name) {
-            if Checker::verify_checksum(archive, &metadata.checksum, HashAlgorithm::Sha256)? {
+        let checksum_path = format!("{}.sha256", archive);
+        
+        if std::path::Path::new(&checksum_path).exists() {
+            utils::print_info(&format!("Found checksum file: {}", checksum_path));
+            
+            if Checker::verify_from_checksum_file(archive)? {
                 utils::print_success("✓ Checksum matches! Archive is intact.");
             } else {
                 utils::print_error("✗ Checksum mismatch! Archive may be corrupted.");
+                return Err(anyhow::anyhow!("Checksum verification failed"));
             }
         } else {
-            utils::print_warning("No stored checksum found for comparison.");
+            let checksum = Checker::generate_checksum(archive)?;
+            utils::print_success(&format!("Checksum: {}", checksum));
+
+            let archive_name = std::path::Path::new(archive)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .context("Invalid archive path")?;
+
+            let state = StateTracker::load()?;
+            if let Some(metadata) = state.get_archive(archive_name) {
+                if Checker::verify_checksum(archive, &metadata.checksum)? {
+                    utils::print_success("✓ Checksum matches state! Archive is intact.");
+                } else {
+                    utils::print_error("✗ Checksum mismatch with state!");
+                }
+            } else {
+                utils::print_warning("No stored checksum found in state.");
+                utils::print_info("💡 Tip: Checksum file will be auto-generated next time");
+            }
         }
 
         Ok(())
     }
 
-    pub fn run_config(&self) -> Result<()> {
+    fn run_config(&self) -> Result<()> {
         let config_path = Config::config_path()?;
         let state_dir = Config::state_dir()?;
 
@@ -341,6 +388,8 @@ impl Cli {
             println!("  Default algorithm: {}", config.default_algorithm);
             println!("  Date format:       {}", config.date_format);
             println!("  Encrypt by default: {}", config.encrypt_by_default);
+            println!("  Generate checksum file: {}", config.generate_checksum_file);
+            println!("  Verify after backup: {}", config.verify_after_backup);
         } else {
             utils::print_warning("Config file doesn't exist yet. Will be created on first backup.");
         }
@@ -349,7 +398,7 @@ impl Cli {
         Ok(())
     }
 
-    pub fn run_interactive(&self) -> Result<()> {
+    fn run_interactive(&self) -> Result<()> {
         let config = Config::load()?;
         let choices = vec!["Create Backup", "List Archives", "Show Archive Contents", "Exit"];
 
@@ -394,7 +443,7 @@ impl Cli {
         }
     }
 
-    pub fn select_destination_interactive(config: &Config) -> Result<String> {
+    fn select_destination_interactive(config: &Config) -> Result<String> {
         utils::print_info("💾 Where do you want to save the backup?");
         
         match Fuzzer::find_and_select(&config.backup_folders, "backups") {
@@ -428,7 +477,7 @@ impl Cli {
         }
     }
 
-    pub fn select_algorithm_interactive() -> Result<String> {
+    fn select_algorithm_interactive() -> Result<String> {
         utils::print_info("📦 Select compression algorithm:");
         
         let algorithms = vec![

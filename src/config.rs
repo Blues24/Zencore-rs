@@ -35,6 +35,12 @@ pub struct Config {
 
     #[serde(default)]
     pub compression_level: Option<i32>,
+
+    #[serde(default)]
+    pub generate_checksum_file: bool,
+
+    #[serde(default)]
+    pub verify_after_backup: bool,
 }
 
 fn default_algorithm() -> String {
@@ -80,6 +86,8 @@ impl Default for Config {
             default_hash_algorithm: default_hash_algorithm(),
             num_threads: 0,
             compression_level: None,
+            generate_checksum_file: true,
+            verify_after_backup: true,
         }
     }
 }

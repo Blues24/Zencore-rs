@@ -1,23 +1,50 @@
-name: Rust Multi-Platform Release
+name: Zencore-rs Linux and Windows Release Action
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag yang ingin dibuild (misalnya v1.0-Noble)"
+        description: "Nama tag release (misalnya v1.2.0-Sakura)"
         required: true
-        default: "v1.0-Noble"
+      base_branch:
+        description: "Branch dasar tempat tag akan dibuat"
+        required: true
+        default: "main"
 
 jobs:
-  build-linux:
-    name: Build Linux binary
+  create-tag:
+    name: Create Git Tag
     runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.make_tag.outputs.tag_name }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ github.event.inputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Create tag
+        id: make_tag
+        run: |
+          TAG=${{ github.event.inputs.tag }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Automated release: $TAG"
+          git push origin "$TAG"
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    needs: create-tag
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-tag.outputs.tag_name }}
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -28,33 +55,40 @@ jobs:
       - name: Build (Linux)
         run: cargo build --release --locked
 
-      - name: Package artifacts (Linux)
+      - name: Get binary name
+        id: binname
+        run: |
+          BIN_NAME="zencore"
+          echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Package artifacts
         run: |
           mkdir -p artifacts
-          BIN_NAME="zencore"
-          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          TAG="${{ needs.create-tag.outputs.tag_name }}"
           cp "target/release/$BIN_NAME" "artifacts/"
           cd artifacts
-          zip ${BIN_NAME}-${VERSION}-linux.zip $BIN_NAME
-          sha256sum ${BIN_NAME}-${VERSION}-linux.zip > ${BIN_NAME}-${VERSION}-linux.zip.sha256
+          zip ${BIN_NAME}-${TAG}-linux.zip $BIN_NAME
+          sha256sum ${BIN_NAME}-${TAG}-linux.zip > ${BIN_NAME}-${TAG}-linux.zip.sha256
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-artifacts-${{ github.event.inputs.tag || github.ref_name }}
+          name: linux-artifacts-${{ needs.create-tag.outputs.tag_name }}
           path: artifacts/*
 
   build-windows:
-    name: Cross-compile Windows binary
+    name: Cross-compile Windows Binary
     runs-on: ubuntu-latest
+    needs: create-tag
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.create-tag.outputs.tag_name }}
 
-      - name: Install dependencies
+      - name: Install mingw-w64
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
       - name: Set up Rust
@@ -67,46 +101,62 @@ jobs:
       - name: Build (Windows)
         run: cargo build --release --target x86_64-pc-windows-gnu --locked
 
-      - name: Package artifacts (Windows)
+      - name: Get binary name
+        id: binname
+        run: |
+          BIN_NAME="zencore"
+          echo "bin_name=$BIN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Package artifacts
         run: |
           mkdir -p artifacts
-          BIN_NAME="zencore"
-          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          BIN_NAME="${{ steps.binname.outputs.bin_name }}"
+          TAG="${{ needs.create-tag.outputs.tag_name }}"
           cp "target/x86_64-pc-windows-gnu/release/${BIN_NAME}.exe" "artifacts/"
           cd artifacts
-          zip ${BIN_NAME}-${VERSION}-windows.zip ${BIN_NAME}.exe
-          sha256sum ${BIN_NAME}-${VERSION}-windows.zip > ${BIN_NAME}-${VERSION}-windows.zip.sha256
+          zip ${BIN_NAME}-${TAG}-windows.zip ${BIN_NAME}.exe
+          sha256sum ${BIN_NAME}-${TAG}-windows.zip > ${BIN_NAME}-${TAG}-windows.zip.sha256
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-artifacts-${{ github.event.inputs.tag || github.ref_name }}
+          name: windows-artifacts-${{ needs.create-tag.outputs.tag_name }}
           path: artifacts/*
 
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, create-tag]
 
     steps:
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: linux-artifacts-${{ github.event.inputs.tag || github.ref_name }}
+          name: linux-artifacts-${{ needs.create-tag.outputs.tag_name }}
           path: release_artifacts
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-artifacts-${{ github.event.inputs.tag || github.ref_name }}
+          name: windows-artifacts-${{ needs.create-tag.outputs.tag_name }}
           path: release_artifacts
+
+      - name: Format release name
+        id: relname
+        run: |
+          TAG="${{ needs.create-tag.outputs.tag_name }}"
+          VERSION="${TAG%%-*}"
+          CODENAME="${TAG#*-}"
+          NAME="${VERSION} – ${CODENAME} Release"
+          echo "name=$NAME" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Zencore-rs ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.create-tag.outputs.tag_name }}
+          name: ${{ steps.relname.outputs.name }}
           generate_release_notes: true
           files: release_artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
