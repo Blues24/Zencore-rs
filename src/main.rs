@@ -7,7 +7,6 @@ mod compress;
 mod config;
 mod crypto;
 mod fuzzer;
-mod path_utils;
 mod state;
 mod utils;
 
