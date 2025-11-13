@@ -5,15 +5,13 @@ use aes_gcm::{
 use anyhow::{Context, Result};
 use argon2::{
     password_hash::{rand_core::RngCore, PasswordHasher, SaltString},
-    Argon2,
+    Argon2, Params, Version,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
-
-const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MB chunks
 
 pub struct Encryptor {
     password: String,
@@ -24,11 +22,23 @@ impl Encryptor {
         Self { password }
     }
 
-    fn derive_key(&self) -> Result<([u8; 32], SaltString)> {
-        crate::utils::print_info("Deriving encryption key with Argon2...");
+    fn derive_key(&self, pb: &ProgressBar) -> Result<([u8; 32], SaltString)> {
+        pb.set_message("🔑 Deriving encryption key (fast mode)...");
         
         let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
+        
+        let params = Params::new(
+            32768,    // 32 MB memory (was 1 GB by default!)
+            3,        // 3 iterations (was 10 by default!)
+            1,        // 1 thread
+            None
+        ).map_err(|e| anyhow::anyhow!("Failed to create Argon2 params: {}", e))?;
+        
+        let argon2 = Argon2::new(
+            argon2::Algorithm::Argon2id,
+            Version::V0x13,
+            params
+        );
 
         let password_hash = argon2
             .hash_password(self.password.as_bytes(), &salt)
@@ -40,6 +50,8 @@ impl Encryptor {
         let mut key = [0u8; 32];
         key.copy_from_slice(&hash_bytes[..32]);
 
+        pb.set_message("✓ Key derived successfully");
+
         Ok((key, salt))
     }
 
@@ -48,44 +60,37 @@ impl Encryptor {
 
         let file_size = fs::metadata(file_path)?.len();
         
-        let pb = ProgressBar::new(file_size);
+        let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% {msg}")
                 .unwrap()
                 .progress_chars("█▓▒░-"),
         );
-        pb.set_message("Reading file");
 
-        let plaintext = fs::read(file_path)?;
-        pb.set_position(file_size);
-        pb.set_message("File loaded");
-
-        pb.set_length(file_size + CHUNK_SIZE);
         pb.set_position(0);
-        pb.set_message("Deriving key");
-        
-        let (key, salt) = self.derive_key()?;
-        pb.inc(500);
+        pb.set_message("Reading file...");
+        let plaintext = fs::read(file_path)?;
+        pb.set_position(20);
 
-        pb.set_message("Initializing cipher");
+        pb.set_message("Deriving encryption key...");
+        let (key, salt) = self.derive_key(&pb)?;
+        pb.set_position(40);
+
+        pb.set_message("Initializing cipher...");
         let cipher = Aes256Gcm::new_from_slice(&key)?;
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        pb.inc(100);
+        pb.set_position(50);
 
-        pb.set_message("Encrypting data");
-        pb.set_position(500);
-        pb.set_length(file_size);
-        
+        pb.set_message("Encrypting data...");
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_ref())
             .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
-        
-        pb.set_position(file_size);
-        pb.set_message("Writing encrypted file");
+        pb.set_position(80);
 
+        pb.set_message("Writing encrypted file...");
         let backup_path = format!("{}.bak", file_path);
         fs::rename(file_path, &backup_path)?;
 
@@ -93,8 +98,9 @@ impl Encryptor {
         encrypted_file.write_all(salt.as_str().as_bytes())?;
         encrypted_file.write_all(&nonce_bytes)?;
         encrypted_file.write_all(&ciphertext)?;
+        pb.set_position(100);
 
-        pb.finish_with_message("Encryption complete!");
+        pb.finish_with_message("✓ Encryption complete!");
 
         crate::utils::print_success(&format!(
             "File encrypted successfully ({:.2} MB)",
@@ -136,7 +142,7 @@ impl Checker {
             pb.set_position(total_read);
         }
 
-        pb.finish_with_message("Checksum complete!");
+        pb.finish_with_message("✓ Checksum complete");
 
         Ok(format!("{:x}", hasher.finalize()))
     }
