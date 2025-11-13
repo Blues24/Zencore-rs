@@ -9,6 +9,7 @@ mod crypto;
 mod fuzzer;
 mod state;
 mod utils;
+mod remote;
 
 use cli::Cli;
 
