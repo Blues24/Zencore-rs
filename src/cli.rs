@@ -313,13 +313,13 @@ impl Cli {
             encrypted,
             contents: file_list,
         };
-
+        let cloned = metadata.clone();
         let mut state = StateTracker::load()?;
         state.add_archive(metadata);
         state.save()?;
 
         utils::print_success("✓ Backup completed successfully!");
-        utils::print_info(&format!("Files backed up: {}", metadata.file_count));
+        utils::print_info(&format!("Files backed up: {}", cloned.file_count));
         utils::print_info(&format!("Archive size: {:.2} MB", file_size as f64 / 1_048_576.0));
 
         Ok(())
