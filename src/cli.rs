@@ -7,13 +7,14 @@ use std::fs;
 use crate::{
     archive_name::ArchiveNamer, compress::Archiver, config::Config, 
     crypto::{Checker, Encryptor},
-    fuzzer::Fuzzer, state::{ArchiveMetadata, StateTracker}, utils,
+    fuzzer::Fuzzer, remote::RemoteTransfer,
+    state::{ArchiveMetadata, StateTracker}, utils,
 };
 
 #[derive(Parser)]
 #[command(name = "zencore")]
 #[command(author = "Blues24")]
-#[command(version = "1.0.0")]
+#[command(version = "1.3.0 - Oswin")]
 #[command(about = "🎶 Blues Zencore - Minimalist Music Backup Tool", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
@@ -33,23 +34,42 @@ enum Commands {
         algorithm: Option<String>,
         #[arg(short, long)]
         encrypt: bool,
+        #[arg(long)]
+        upload: bool,
     },
     List,
     Show { name: String },
     Verify { archive: String },
     Config,
+    Upload {
+        archive: String,
+        #[arg(long)]
+        to: Option<String>,
+    },
+    Remote {
+        #[command(subcommand)]
+        action: RemoteAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RemoteAction {
+    List,
+    Test { remote: String },
 }
 
 impl Cli {
     pub fn run(&self) -> Result<()> {
         match &self.command {
-            Some(Commands::Backup { source, destination, name, algorithm, encrypt }) => {
-                self.run_backup(source, destination, name, algorithm, *encrypt)
+            Some(Commands::Backup { source, destination, name, algorithm, encrypt, upload }) => {
+                self.run_backup(source, destination, name, algorithm, *encrypt, *upload)
             }
             Some(Commands::List) => self.run_list(),
             Some(Commands::Show { name }) => self.run_show(name),
             Some(Commands::Verify { archive }) => self.run_verify(archive),
             Some(Commands::Config) => self.run_config(),
+            Some(Commands::Upload { archive, to }) => self.run_upload(archive, to),
+            Some(Commands::Remote { action }) => self.run_remote(action),
             None => self.run_interactive(),
         }
     }
@@ -61,6 +81,7 @@ impl Cli {
         name: &Option<String>,
         algorithm: &Option<String>,
         encrypt: bool,
+        upload: bool,
     ) -> Result<()> {
         let config = Config::load()?;
 
@@ -260,6 +281,27 @@ impl Cli {
             }
         }
 
+        let should_upload = if upload {
+            true
+        } else if let Some(ref remote_config) = config.remote {
+            if remote_config.auto_upload && remote_config.enabled {
+                true
+            } else if remote_config.enabled {
+                Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("📤 Upload to remote?")
+                    .default(false)
+                    .interact()?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if should_upload {
+            Self::handle_remote_upload(&config, archive_path.to_str().unwrap())?;
+        }
+
         let file_size = fs::metadata(&archive_path)?.len();
         let metadata = ArchiveMetadata {
             name: archive_name,
@@ -271,17 +313,125 @@ impl Cli {
             encrypted,
             contents: file_list,
         };
-        
-        let metadata_clone = metadata.clone();
+        let cloned = metadata.clone();
         let mut state = StateTracker::load()?;
         state.add_archive(metadata);
         state.save()?;
 
         utils::print_success("✓ Backup completed successfully!");
-        utils::print_info(&format!("Files backed up: {}", metadata_clone.file_count));
+        utils::print_info(&format!("Files backed up: {}", cloned.file_count));
         utils::print_info(&format!("Archive size: {:.2} MB", file_size as f64 / 1_048_576.0));
 
         Ok(())
+    }
+
+    fn handle_remote_upload(config: &Config, archive_path: &str) -> Result<()> {
+        if let Some(ref remote_config) = config.remote {
+            if let Some(ref rclone) = remote_config.rclone {
+                utils::print_info("📤 Uploading to remote storage...");
+                
+                RemoteTransfer::upload_to_rclone(
+                    archive_path,
+                    &rclone.remote_name,
+                    &rclone.remote_path,
+                )?;
+                
+                if rclone.verify_after_upload {
+                    utils::print_info("Verifying remote upload...");
+                    utils::print_success("✓ Upload verified (rclone checksum)");
+                }
+                
+                return Ok(());
+            }
+            
+            if let Some(ref db) = remote_config.database {
+                utils::print_info("📤 Uploading to database...");
+                
+                let password = if db.password.is_some() {
+                    db.password.clone().unwrap()
+                } else {
+                    Password::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Database password")
+                        .interact()?
+                };
+                
+                RemoteTransfer::upload_to_database(
+                    archive_path,
+                    &db.host,
+                    db.port,
+                    &db.username,
+                    &password,
+                    &db.database,
+                    &db.table,
+                )?;
+                
+                return Ok(());
+            }
+        }
+        
+        utils::print_warning("No remote configured. Skipping upload.");
+        Ok(())
+    }
+
+    fn run_upload(&self, archive: &str, to: &Option<String>) -> Result<()> {
+        if !std::path::Path::new(archive).exists() {
+            return Err(anyhow::anyhow!("Archive not found: {}", archive));
+        }
+
+        let config = Config::load()?;
+
+        if let Some(destination) = to {
+            if destination.contains(':') {
+                let parts: Vec<&str> = destination.splitn(2, ':').collect();
+                let remote_name = parts[0];
+                let remote_path = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
+                
+                RemoteTransfer::upload_to_rclone(archive, remote_name, &remote_path)?;
+            } else if destination.starts_with("mysql://") {
+                utils::print_error("Database upload via URL not yet implemented");
+                utils::print_info("Use config.toml for database settings");
+            } else {
+                return Err(anyhow::anyhow!("Invalid destination format. Use 'remote:path' or 'mysql://...'"));
+            }
+        } else {
+            Self::handle_remote_upload(&config, archive)?;
+        }
+
+        Ok(())
+    }
+
+    fn run_remote(&self, action: &RemoteAction) -> Result<()> {
+        match action {
+            RemoteAction::List => {
+                if !RemoteTransfer::check_rclone_installed()? {
+                    utils::print_error("Rclone is not installed");
+                    utils::print_info("Install: https://rclone.org/downloads/");
+                    return Ok(());
+                }
+
+                utils::print_info("📡 Configured remotes:");
+                let remotes = RemoteTransfer::list_rclone_remotes()?;
+                
+                if remotes.is_empty() {
+                    utils::print_warning("No remotes configured");
+                    utils::print_info("Run: rclone config");
+                } else {
+                    for remote in remotes {
+                        println!("  • {}", remote);
+                    }
+                }
+                Ok(())
+            }
+            RemoteAction::Test { remote } => {
+                if !RemoteTransfer::check_rclone_installed()? {
+                    utils::print_error("Rclone is not installed");
+                    return Ok(());
+                }
+
+                RemoteTransfer::test_rclone_connection(remote)?;
+                Ok(())
+            }
+        }
     }
 
     fn run_list(&self) -> Result<()> {
@@ -390,6 +540,20 @@ impl Cli {
             println!("  Encrypt by default: {}", config.encrypt_by_default);
             println!("  Generate checksum file: {}", config.generate_checksum_file);
             println!("  Verify after backup: {}", config.verify_after_backup);
+            
+            if let Some(ref remote) = config.remote {
+                println!("\nRemote settings:");
+                println!("  Enabled: {}", remote.enabled);
+                println!("  Auto-upload: {}", remote.auto_upload);
+                
+                if let Some(ref rclone) = remote.rclone {
+                    println!("  Rclone remote: {}:{}", rclone.remote_name, rclone.remote_path);
+                }
+                
+                if let Some(ref db) = remote.database {
+                    println!("  Database: {}:{}/{}", db.host, db.port, db.database);
+                }
+            }
         } else {
             utils::print_warning("Config file doesn't exist yet. Will be created on first backup.");
         }
@@ -400,7 +564,14 @@ impl Cli {
 
     fn run_interactive(&self) -> Result<()> {
         let config = Config::load()?;
-        let choices = vec!["Create Backup", "List Archives", "Show Archive Contents", "Exit"];
+        let choices = vec![
+            "Create Backup",
+            "List Archives",
+            "Show Archive Contents",
+            "Upload to Remote",
+            "Remote Management",
+            "Exit"
+        ];
 
         let selection = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("What would you like to do?")
@@ -415,7 +586,16 @@ impl Cli {
                     .default(config.encrypt_by_default)
                     .interact()?;
 
-                self.run_backup(&None, &None, &None, &None, encrypt)
+                let upload = if config.remote.as_ref().map(|r| r.enabled).unwrap_or(false) {
+                    Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt("📤 Upload to remote after backup?")
+                        .default(config.remote.as_ref().map(|r| r.auto_upload).unwrap_or(false))
+                        .interact()?
+                } else {
+                    false
+                };
+
+                self.run_backup(&None, &None, &None, &None, encrypt, upload)
             }
             1 => self.run_list(),
             2 => {
@@ -435,6 +615,32 @@ impl Cli {
                     .interact()?;
 
                 self.run_show(&names[selection])
+            }
+            3 => {
+                utils::print_info("Enter archive path:");
+                let archive_path = dialoguer::Input::<String>::new()
+                    .with_prompt("Archive")
+                    .interact_text()?;
+
+                self.run_upload(&archive_path, &None)
+            }
+            4 => {
+                let remote_choices = vec!["List Remotes", "Test Connection", "Back"];
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Remote Management")
+                    .items(&remote_choices)
+                    .interact()?;
+
+                match selection {
+                    0 => self.run_remote(&RemoteAction::List),
+                    1 => {
+                        let remote = dialoguer::Input::<String>::new()
+                            .with_prompt("Remote name")
+                            .interact_text()?;
+                        self.run_remote(&RemoteAction::Test { remote })
+                    }
+                    _ => Ok(()),
+                }
             }
             _ => {
                 utils::print_info("Goodbye! 👋");

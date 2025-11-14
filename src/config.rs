@@ -36,11 +36,56 @@ pub struct Config {
     #[serde(default)]
     pub compression_level: Option<i32>,
 
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub generate_checksum_file: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub verify_after_backup: bool,
+
+    #[serde(default)]
+    pub remote: Option<RemoteConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RemoteConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub auto_upload: bool,
+
+    #[serde(default)]
+    pub rclone: Option<RcloneConfig>,
+
+    #[serde(default)]
+    pub database: Option<DatabaseConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RcloneConfig {
+    pub remote_name: String,
+    pub remote_path: String,
+
+    #[serde(default = "default_true")]
+    pub verify_after_upload: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+
+    #[serde(default = "default_mysql_port")]
+    pub port: u16,
+
+    pub username: String,
+
+    #[serde(skip_serializing)]
+    pub password: Option<String>,
+
+    pub database: String,
+
+    #[serde(default = "default_table_name")]
+    pub table: String,
 }
 
 fn default_algorithm() -> String {
@@ -70,7 +115,19 @@ fn default_cipher() -> String {
 }
 
 fn default_hash_algorithm() -> String {
-    "blake3".to_string()
+    "sha256".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_mysql_port() -> u16 {
+    3306
+}
+
+fn default_table_name() -> String {
+    "backups".to_string()
 }
 
 impl Default for Config {
@@ -88,6 +145,7 @@ impl Default for Config {
             compression_level: None,
             generate_checksum_file: true,
             verify_after_backup: true,
+            remote: None,
         }
     }
 }
