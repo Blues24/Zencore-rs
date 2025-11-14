@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::process::{Command, Stdio};
 use std::path::Path;
-use std::fs::File;
 use std::io::{BufRead, BufReader};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[derive(Debug, Clone)]
 pub enum RemoteDestination {
@@ -78,7 +78,8 @@ impl RemoteTransfer {
         let file_name = Path::new(local_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("archive");
+            .unwrap_or("archive")
+            .to_string();
 
         let pb = ProgressBar::new(100);
         pb.set_style(
@@ -185,7 +186,7 @@ impl RemoteTransfer {
         pb.set_position(30);
         pb.set_message("Preparing data...");
 
-        let encoded_data = base64::encode(&file_data);
+        let encoded_data = STANDARD.encode(&file_data);
 
         pb.set_position(50);
         pb.set_message("Inserting into database...");
