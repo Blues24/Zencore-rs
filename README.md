@@ -117,8 +117,13 @@ cargo build --release
 # Install to /usr/local/bin (optional)
 sudo cp target/release/zencore /usr/local/bin/
 
-# Or add to PATH
-export PATH="$PATH:$(pwd)/target/release"
+# or use Cargo
+cargo install Zencore-rs
+
+# For arch linux user
+yay -S zencore-rs # use your prefered AUR helper
+# or
+paru -S zencore-rs
 ```
 
 #### Windows
