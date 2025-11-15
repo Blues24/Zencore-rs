@@ -1,0 +1,109 @@
+name: Package DEB & RPM
+
+on:
+  workflow_run:
+    workflows: ["Zencore-rs Linux and Windows Release Action"]  # nama workflow release
+    types:
+      - completed
+
+jobs:
+  build-packages:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Extract version & codename
+        id: meta
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          VERSION="${TAG%%-*}"      # v1.2.0
+          VERSION="${VERSION#v}"    # 1.2.0
+          CODENAME="${TAG#*-}"      # Noble
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "codename=$CODENAME" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y cargo rpm build-essential fakeroot dpkg-dev
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      ###########################################
+      # BUILD DEBIAN PACKAGE
+      ###########################################
+      - name: Build DEB package
+        run: |
+          mkdir -p deb/DEBIAN
+          mkdir -p deb/usr/local/bin
+          cp target/release/zencore-rs deb/usr/local/bin/
+
+          cat <<EOF > deb/DEBIAN/control
+          Package: zencore-rs
+          Version: ${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.codename }}
+          Architecture: amd64
+          Maintainer: Blues
+          Description: Zencore-rs CLI tool
+          EOF
+
+          dpkg-deb --build deb \
+            zencore-rs_${{ steps.meta.outputs.version }}_${{ steps.meta.outputs.codename }}_amd64.deb
+
+      ###########################################
+      # BUILD RPM PACKAGE
+      ###########################################
+      - name: Build RPM package
+        run: |
+          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+          mkdir -p rpmbuild/SOURCES/bin
+          cp target/release/zencore-rs rpmbuild/SOURCES/bin/zencore-rs
+
+          cat <<EOF > rpmbuild/SPECS/zencore-rs.spec
+          Name: zencore-rs
+          Version: ${{ steps.meta.outputs.version }}
+          Release: ${{ steps.meta.outputs.codename }}
+          Summary: Zencore-rs CLI tool
+          License: MIT
+          BuildArch: x86_64
+
+          %description
+          Zencore-rs command line tool.
+
+          %prep
+
+          %build
+
+          %install
+          install -Dm755 %{_sourcedir}/bin/zencore-rs %{buildroot}/usr/local/bin/zencore-rs
+
+          %files
+          /usr/local/bin/zencore-rs
+          EOF
+
+          rpmbuild -ba rpmbuild/SPECS/zencore-rs.spec
+
+          cp rpmbuild/RPMS/x86_64/*.rpm \
+            zencore-rs-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.codename }}-1.x86_64.rpm
+
+      ###########################################
+      # UPLOAD TO RELEASE
+      ###########################################
+      - name: Upload DEB & RPM to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          files: |
+            zencore-rs_${{ steps.meta.outputs.version }}_${{ steps.meta.outputs.codename }}_amd64.deb
+            zencore-rs-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.codename }}-1.x86_64.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
