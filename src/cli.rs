@@ -96,7 +96,83 @@ fn run_backup(
 ) -> Result<()> {
     let config = Config::load()?;
 
-    // ... (existing source/destination logic) ...
+    let source_path = match source {
+        Some(path) => {
+            let expanded = shellexpand::tilde(path).to_string();
+            if !std::path::Path::new(&expanded).exists() {
+                utils::print_warning(&format!("Path not found: {}", path));
+                utils::print_info("Falling back to interactive selection...");
+                let selected = Fuzzer::find_and_select(&config.music_folders, "music")?;
+                selected.to_string_lossy().to_string()
+            } else {
+                expanded 
+            }
+        }
+
+        None => match Fuzzer::find_and_select(&config.music_folders, "music") {
+        Ok(selected) => selected.to_string_losssy().to_string(),
+        Err(_) => {
+            utils::print_warning("No Target folder found in config paths");
+            utils::print_info("Please enter source path manually: ");
+
+            let manual_path = dialoguer::Input::<String>::new()
+                .with_prompt("Source folder")
+                .interact_text()?;
+
+            let expanded = shellexpand::tilde(&manual_path).to_string();
+            if !std::path::Path::new(&expanded).exists() {
+                return Err(anyhow::anyhow!("Path does not exists: {}", expanded));
+             }
+            expanded 
+          }
+        },
+    };
+
+    let dest_path = match destination {
+            Some(path) => {
+                let expanded = shellexpand::tilde(path).to_string();
+                if !std::path::Path::new(&expanded).exists() {
+                    utils::print_warning(&format!("Path not found: {}", path));
+
+                    let create = Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Create destination folder?")
+                        .default(true)
+                        .interact()?;
+
+                    if create {
+                        fs::create_dir_all(&expanded)?;
+                        utils::print_success(&format!("Created: {}", expanded));
+                        expanded
+                    } else {
+                        return Err(anyhow::anyhow!("Destination folder required"));
+                    }
+                } else {
+                    expanded
+                }
+            }
+            None => {
+                if !config.default_backup_destination.is_empty() {
+                    let default_dest = shellexpand::tilde(&config.default_backup_destination).to_string();
+
+                    let use_default = Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt(format!("Use default destination: {}?", config.default_backup_destination))
+                        .default(true)
+                        .interact()?;
+
+                    if use_default {
+                        if !std::path::Path::new(&default_dest).exists() {
+                            fs::create_dir_all(&default_dest)?;
+                            utils::print_success(&format!("Created: {}", default_dest));
+                        }
+                        default_dest
+                    } else {
+                        Self::select_destination_interactive(&config)?
+                    }
+                } else {
+                    Self::select_destination_interactive(&config)?
+                }
+            }
+        };
 
     let algo = match algorithm {
         Some(a) => {
@@ -244,7 +320,7 @@ fn run_backup(
     };
 
     let mut state = StateTracker::load()?;
-    state.add_archive(metadata);
+    state.add_archive(metadata.clone());
     state.save()?;
 
     utils::print_success("✓ Backup completed successfully!");
@@ -254,9 +330,119 @@ fn run_backup(
         file_size as f64 / 1_048_576.0
     ));
 
+    if !metadata.checksums.is_empty(){
+        utils::print_info("\nChecksums: ");
+        for (algo, hash) in metadata.list_checksums() {
+            println!(" {} = {}", algo, hash);
+        }
+    }
+
     Ok(())
 }
 
+fn run_verify(&self, archive: &str, algorithm: &option<String>) -> Result<()> {
+    utils::print_info("🔍 Verifying archive integrity...");
+
+    let checksum_path = format!("{}.sha256", archive);
+
+    if std::path::Path::new(&checksum_path).exists() {
+        utils::print_info(&format!("Found checksum file: {}", checksum_path));
+
+        if crate::crypto::Checker::verify_from_checksum_file(archive)? {
+            utils::print_success("✓ Checksum matches! Archive is intact.");
+        } else {
+            utils::print_error("✗ Checksum mismatch! Archive may be corrupted.");
+            return Err(anyhow::anyhow!("Checksum verification failed"));
+        }
+    } else {
+        // Use specified algorithm or default to SHA-256
+        let algo = if let Some(algo_str) = algorithm {
+            crate::crypto::HashAlgorithm::from_str(algo_str)?
+        } else {
+            crate::crypto::HashAlgorithm::Sha256
+        };
+
+        let checksum = crate::crypto::Checker::generate_checksum_with_algorithm(
+            archive,
+            algo
+        )?;
+        utils::print_success(&format!("{}: {}", algo.name(), checksum));
+
+        let archive_name = std::path::Path::new(archive)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Invalid archive path")?;
+
+        let state = StateTracker::load()?;
+        if let Some(metadata) = state.get_archive(archive_name) {
+            if let Some(expected) = metadata.get_checksum(algo.name()) {
+                if crate::crypto::Checker::verify_checksum_with_algorithm(
+                    archive,
+                    expected,
+                    algo
+                )? {
+                    utils::print_success(&format!("✓ {} matches state!", algo.name()));
+                } else {
+                    utils::print_error(&format!("✗ {} mismatch with state!", algo.name()));
+                }
+            } else {
+                utils::print_warning(&format!("No {} checksum in state", algo.name()));
+            }
+
+            // Show all available checksums
+            let all_checksums = metadata.list_checksums();
+            if !all_checksums.is_empty() {
+                utils::print_info("\nAvailable checksums in state:");
+                for (algo_name, hash) in all_checksums {
+                    println!("  {} = {}", algo_name, hash);
+                }
+            }
+        } else {
+            utils::print_warning("No stored checksum found in state.");
+            utils::print_info("💡 Tip: Checksum file will be auto-generated next time");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_show(&self, name: &str) -> Result<()> {
+    let state = StateTracker::load()?;
+    let archive = state.get_archive(name).context("Archive not found in state")?;
+
+    println!("\n📦 Archive Details: {}\n", archive.name);
+    println!("Created:    {}", archive.created_at);
+    println!("Algorithm:  {}", archive.algorithm);
+
+    // Show all checksums
+    let checksums = archive.list_checksums();
+    if !checksums.is_empty() {
+        println!("Checksums:");
+        for (algo, hash) in checksums {
+            println!("  {} = {}", algo, hash);
+        }
+    } else if !archive.checksum.is_empty() {
+        println!("Checksum:   {}", archive.checksum);
+    }
+
+    println!("Size:       {:.2} MB", archive.size_bytes as f64 / 1_048_576.0);
+    println!("Files:      {}", archive.file_count);
+    println!("Encrypted:  {}", if archive.encrypted { "Yes" } else { "No" });
+
+    println!("\n📄 Contents ({} files):\n", archive.contents.len());
+
+    let limit = 50.min(archive.contents.len());
+    for (i, file) in archive.contents.iter().take(limit).enumerate() {
+        println!("  {}. {}", i + 1, file);
+    }
+
+    if archive.contents.len() > limit {
+        println!("\n  ... and {} more files", archive.contents.len() - limit);
+    }
+
+    println!();
+    Ok(())
+}
 // Update match in run() method
 Some(Commands::Backup { 
     source, 
