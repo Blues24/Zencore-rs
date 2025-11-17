@@ -19,7 +19,7 @@ use crate::{
 #[derive(Parser)]
 #[command(name = "zencore")]
 #[command(author = "Blues24")]
-#[command(version = "1.3.1 - Oswin Oswald")]
+#[command(version = "1.3.0 - Oswin")]
 #[command(about = "🎶 Blues Zencore - Minimalist Music Backup Tool", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
@@ -374,7 +374,8 @@ impl Cli {
         // CREATE ARCHIVER WITH ALL OPTIONS
         let start_time = std::time::Instant::now();
 
-        let mut archiver = Archiver::new(&source_path, &dest_path, archive_name.clone(), algo.clone());
+        let mut archiver = Archiver::new(&source_path, &dest_path, archive_name.clone(), algo.clone())
+            .with_size_sorting(config.sort_files_by_size);
 
         if threads > 0 {
             archiver = archiver.with_threads(threads);

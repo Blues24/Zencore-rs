@@ -49,7 +49,10 @@ pub struct Config {
 
     #[serde(default)]
     pub fuzzer: Option<FuzzerSettings>,
-
+    
+    #[serde(default = "default_true")]
+    pub sort_files_by_size: bool,
+    
     #[serde(default)]
     pub naming_presets: Option<Vec<NamingPreset>>,
 }
