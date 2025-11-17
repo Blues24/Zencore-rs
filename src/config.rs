@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::fuzzer::FuzzerConfig;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(default = "default_algorithm")]
@@ -44,6 +46,12 @@ pub struct Config {
 
     #[serde(default)]
     pub remote: Option<RemoteConfig>,
+
+    #[serde(default)]
+    pub fuzzer: Option<FuzzerSettings>,
+
+    #[serde(default)]
+    pub naming_presets: Option<Vec<NamingPreset>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,6 +96,25 @@ pub struct DatabaseConfig {
     pub table: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FuzzerSettings {
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+
+    #[serde(default = "default_exclude_patterns")]
+    pub exclude_patterns: Vec<String>,
+
+    #[serde(default)]
+    pub case_sensitive: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NamingPreset {
+    pub name: String,
+    pub template: String,
+    pub description: String,
+}
+
 fn default_algorithm() -> String {
     "tar.zst".to_string()
 }
@@ -130,6 +157,19 @@ fn default_table_name() -> String {
     "backups".to_string()
 }
 
+fn default_max_depth() -> usize {
+    5
+}
+
+fn default_exclude_patterns() -> Vec<String> {
+    vec![
+        ".git".to_string(),
+        "node_modules".to_string(),
+        ".cache".to_string(),
+        "target".to_string(),
+    ]
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -146,6 +186,28 @@ impl Default for Config {
             generate_checksum_file: true,
             verify_after_backup: true,
             remote: None,
+            fuzzer: Some(FuzzerSettings {
+                max_depth: default_max_depth(),
+                exclude_patterns: default_exclude_patterns(),
+                case_sensitive: false,
+            }),
+            naming_presets: Some(vec![
+                NamingPreset {
+                    name: "Daily Backup".to_string(),
+                    template: "daily_{date}".to_string(),
+                    description: "Daily backup with timestamp".to_string(),
+                },
+                NamingPreset {
+                    name: "Source + Date".to_string(),
+                    template: "{source}_{date}".to_string(),
+                    description: "Source folder name with date".to_string(),
+                },
+                NamingPreset {
+                    name: "Production".to_string(),
+                    template: "prod_{source}_{year}{month}{day}".to_string(),
+                    description: "Production backup format".to_string(),
+                },
+            ]),
         }
     }
 }
@@ -195,5 +257,31 @@ impl Config {
             .context("Failed to determine state dir")?;
 
         Ok(proj_dirs.data_dir().to_path_buf())
+    }
+
+    pub fn get_fuzzer_config(&self) -> FuzzerConfig {
+        if let Some(ref fuzzer) = self.fuzzer {
+            FuzzerConfig {
+                max_depth: fuzzer.max_depth,
+                exclude_patterns: fuzzer.exclude_patterns.clone(),
+                case_sensitive: fuzzer.case_sensitive,
+            }
+        } else {
+            FuzzerConfig::default()
+        }
+    }
+
+    pub fn get_naming_presets(&self) -> Vec<(String, String)> {
+        if let Some(ref presets) = self.naming_presets {
+            presets
+                .iter()
+                .map(|p| (p.name.clone(), p.template.clone()))
+                .collect()
+        } else {
+            vec![
+                ("Default".to_string(), "{date}".to_string()),
+                ("Source + Date".to_string(), "{source}_{date}".to_string()),
+            ]
+        }
     }
 }
