@@ -5,7 +5,8 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Password, Select};
 use std::fs;
 
 use crate::{
-    archive_name::ArchiveNamer, compress::Archiver, config::Config, 
+    archive_name::ArchiveNamer, archive_name::NamingPresets, 
+    compress::Archiver, config::Config, 
     crypto::{Checker, Encryptor},
     fuzzer::Fuzzer, remote::RemoteTransfer,
     state::{ArchiveMetadata, StateTracker}, utils,
