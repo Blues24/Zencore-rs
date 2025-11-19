@@ -10,6 +10,7 @@ mod fuzzer;
 mod state;
 mod utils;
 mod remote;
+mod encrypt_tar;
 
 use cli::Cli;
 

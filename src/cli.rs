@@ -9,8 +9,8 @@ use crate::{
     archive_name::{ArchiveNamer, NamingPresets},
     compress::Archiver,
     config::Config,
-    crypto::{Checker, Encryptor, HashAlgorithm},
-    fuzzer::{Fuzzer, FuzzerConfig},
+    crypto::{Checker, HashAlgorithm},
+    fuzzer::Fuzzer,
     remote::RemoteTransfer,
     state::{ArchiveMetadata, StateTracker},
     utils,
@@ -290,10 +290,11 @@ impl Cli {
             dest_path.clone(),
             algo.clone(),
             config.date_format.clone(),
-        )
-        .with_source_path(source_path.clone());
+            )
+            .with_source_path(source_path.clone());
 
         let archive_name = namer.generate()?;
+
 
         // DISPLAY CONFIGURATION
         utils::print_header("Backup Configuration");
@@ -318,7 +319,8 @@ impl Cli {
         let (should_encrypt, password) = if encrypt || config.encrypt_by_default {
             if algo == "zip" {
                 let do_encrypt = if encrypt {
-                    true
+                    utils::print_info("Encrypting ZIP archive");
+                    true 
                 } else {
                     Confirm::with_theme(&ColorfulTheme::default())
                         .with_prompt("Encrypt archive? (configured as default)")
@@ -427,24 +429,24 @@ impl Cli {
         }
 
         // POST-COMPRESSION ENCRYPTION (TAR formats)
-        let encrypted = if should_encrypt && algo != "zip" && password.is_some() {
-            utils::print_info("Applying AES-256-GCM encryption wrapper...");
+        let encrypted = if should_encrypt && password.is_some(){
+            if algo == "zip"{
+                utils::print_info("Applying ZIP native encryption..."); 
+            } else {
+                utils::print_info("Applying age encryption to TAR...");
 
-            let encryptor = Encryptor::new(password.unwrap());
-            encryptor.encrypt_file(archive_path.to_str().unwrap())?;
+                let encryptor = crate::encrypt_tar::TarEncryptor::new(password.unwrap());
+                encryptor.encrypt_file(archive_path.to_str().unwrap())?;
 
-            if config.generate_checksum_file {
-                utils::print_info("Updating checksum for encrypted archive...");
-                Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
-            }
-
-            true
-        } else if algo == "zip" && should_encrypt {
-            true
-        } else {
-            false
+                if config.generate_checksum_file {
+                    utils::print_info("Updating checksum for encrypted archive..");
+                    Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+                }
+                 
+            } else {
+                utils::print_warning("No file needed to be encrypted");
+            };
         };
-
         // VERIFY IF ENABLED
         if config.verify_after_backup {
             utils::print_info("🔍 Verifying backup integrity...");

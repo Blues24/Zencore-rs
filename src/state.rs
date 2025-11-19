@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use crate::config::Config;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ArchiveMetadata {
@@ -139,6 +140,6 @@ impl StateTracker {
     }
 
     fn state_file() -> Result<PathBuf> {
-        Ok(crate::config::Config::state_dir()?.join("archives.json"))
+        Ok(Config::state_dir()?.join("archives.json"))
     }
 }

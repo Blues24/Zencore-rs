@@ -10,7 +10,7 @@ use argon2::{
 use blake3;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest as Sha2Digest, Sha256};
-use sha3::{Digest as Sha3Digest, Sha3_256};
+use sha3::Sha3_256;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
@@ -50,7 +50,7 @@ impl Encryptor {
     }
 
     pub fn encrypt_file(&self, file_path: &str) -> Result<String> {
-        crate::utils::print_info("🔒 Encrypting the file, please wait!...");
+        crate::utils::print_info("🔒 Encrypting the file...");
 
         let file_size = fs::metadata(file_path)?.len();
         
@@ -59,7 +59,7 @@ impl Encryptor {
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}% {msg}")
                 .unwrap()
-                .progress_chars("█▓░-"),
+                .progress_chars("█▓░"),
         );
 
         pb.set_position(10);
@@ -152,7 +152,7 @@ impl Checker {
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg}")
                 .unwrap()
-                .progress_chars("█▓░-"),
+                .progress_chars("█▓░"),
         );
         pb.set_message(format!("Calculating {}", algorithm.name()));
 
@@ -177,6 +177,8 @@ impl Checker {
                 Ok(format!("{:x}", hasher.finalize()))
             }
             HashAlgorithm::Sha3_256 => {
+                use sha3::Digest;
+                
                 let mut hasher = Sha3_256::new();
                 let mut buffer = [0u8; 65536];
 
@@ -291,7 +293,7 @@ impl Checker {
         if Path::new(&checksum_path).exists() {
             Self::verify_from_checksum_file(archive_path)
         } else {
-            crate::utils::print_warning("No checksum file, skipping");
+            crate::utils::print_warning("No checksum file, skipping verification");
             Ok(true)
         }
     }

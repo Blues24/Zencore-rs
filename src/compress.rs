@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tar::Builder;
 use walkdir::WalkDir;
+use zip::write::{FileOptions, ExtendedFileOptions};
 use zip::unstable::write::FileOptionsExt;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -223,26 +224,22 @@ impl Archiver {
         let mut zip = zip::ZipWriter::new(zip_file);
 
         let level = self.compression_level.unwrap_or(6);
-        let options = if let Some(ref password) = self.password {
-            crate::utils::print_info("Encrypting with AES-256 (ZIP native)...");
+        let mut options: FileOptions<'_, ExtendedFileOptions> = FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(Some(level as i64));
 
-            zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .compression_level(Some(level as i64))
-                .with_deprecated_encryption(password.as_bytes())
-        } else {
-            zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .compression_level(Some(level as i64))
-        };
+        if let Some(ref password) = self.password {
+            crate::utils::print_info("Encrypting with AES-256 (ZIP native)..");
 
+            options = options.with_deprecated_encryption(password.as_bytes());
+        }
         let mut file_list = Vec::with_capacity(files.len());
 
         for file_path in files {
             let relative = file_path.strip_prefix(&self.source)?;
             let name = relative.to_string_lossy().to_string();
 
-            zip.start_file(&name, options)?;
+            zip.start_file(&name, options.clone())?;
             let mut f = File::open(file_path)?;
             io::copy(&mut f, &mut zip)?;
 
