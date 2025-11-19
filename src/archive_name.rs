@@ -7,7 +7,7 @@ pub struct ArchiveNamer {
     destination: String,
     algorithm: String,
     date_format: String,
-    source_path: Option<String>
+    source_path: Option<String>,
 }
 
 impl ArchiveNamer {
@@ -26,9 +26,9 @@ impl ArchiveNamer {
         }
     }
 
-    pub fn generate(&self) -> Result<String>{
+    pub fn with_source_path(mut self, source: String) -> Self {
         self.source_path = Some(source);
-        self 
+        self
     }
 
     pub fn generate(&self) -> Result<String> {
@@ -75,7 +75,7 @@ impl ArchiveNamer {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("archive");
-            result = result.replace("{source}",source_name);
+            result = result.replace("{source}", source_name);
         }
 
         let timestamp = Local::now().timestamp();
@@ -83,13 +83,12 @@ impl ArchiveNamer {
 
         let date_parts = Local::now();
         result = result.replace("{year}", &date_parts.format("%Y").to_string());
-        result = result.replace("{month}", &date_parts.format("%m").to_string();
+        result = result.replace("{month}", &date_parts.format("%m").to_string());
         result = result.replace("{day}", &date_parts.format("%d").to_string());
         result = result.replace("{hour}", &date_parts.format("%H").to_string());
-        result = result.replace("{minute}". &date_parts.format("%M").to_string());
+        result = result.replace("{minute}", &date_parts.format("%M").to_string());
 
         result
-
     }
 
     fn get_extension(&self) -> &str {
@@ -104,7 +103,7 @@ impl ArchiveNamer {
     pub fn preview(&self, name: &str) -> String {
         let expanded_preview = self.expand_template(name);
         let extension = self.get_extension();
-        format!("{}.{}", expnaded_preview, extension);
+        format!("{}.{}", expanded_preview, extension)
     }
 }
 
@@ -138,7 +137,8 @@ mod tests {
             "/tmp".to_string(),
             "tar.zst".to_string(),
             "%Y%m%d".to_string(),
-        ).with_source_path("/home/user/Music".to_string());
+        )
+        .with_source_path("/home/user/Music".to_string());
 
         let result = namer.expand_template("{source}_{algo}");
         assert!(result.contains("Music_tar.zst"));

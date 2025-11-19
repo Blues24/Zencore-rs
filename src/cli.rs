@@ -19,7 +19,7 @@ use crate::{
 #[derive(Parser)]
 #[command(name = "zencore")]
 #[command(author = "Blues24")]
-#[command(version = "1.3.0 - Oswin")]
+#[command(version = "1.3.1 - Oswin")]
 #[command(about = "🎶 Blues Zencore - Minimalist Music Backup Tool", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]

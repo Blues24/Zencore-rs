@@ -3,6 +3,7 @@ use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
+#[derive(Clone)]
 pub struct FuzzerConfig {
     pub max_depth: usize,
     pub exclude_patterns: Vec<String>,
@@ -19,7 +20,10 @@ impl Default for FuzzerConfig {
                 ".cache".to_string(),
                 "target".to_string(),
                 "tmp".to_string(),
-                "var".to_string(),
+                "temp".to_string(),
+                "__pycache__".to_string(),
+                ".venv".to_string(),
+                "venv".to_string(),
             ],
             case_sensitive: false,
         }
@@ -38,8 +42,9 @@ impl Fuzzer {
         target: &str,
         config: FuzzerConfig,
     ) -> Result<PathBuf> {
-        crate::utils::print_info(&format!("Searching for {} folders...", target));
-        let mut folder_found = Vec::new();
+        crate::utils::print_info(&format!("🔍 Searching for {} folders...", target));
+        
+        let mut folders_found = Vec::new();
 
         for base in base_paths {
             let expanded = shellexpand::tilde(base).to_string();
@@ -48,7 +53,7 @@ impl Fuzzer {
         }
 
         if folders_found.is_empty() {
-            return Err(anyhow::anyhow!("No {} folders found...", target));
+            return Err(anyhow::anyhow!("No {} folders found", target));
         }
 
         folders_found.sort();
@@ -56,8 +61,8 @@ impl Fuzzer {
 
         if folders_found.len() == 1 {
             crate::utils::print_info(&format!(
-                    "Auto-selected: {}",
-                    folders_found[0].display()
+                "Auto-selected: {}",
+                folders_found[0].display()
             ));
             return Ok(folders_found[0].clone());
         }
@@ -78,7 +83,7 @@ impl Fuzzer {
 
         Ok(folders_found[selection].clone())
     }
-    
+
     pub fn find_target_folders(base: &str, target: &str) -> Vec<PathBuf> {
         Self::find_target_folders_with_config(base, target, &FuzzerConfig::default())
     }
@@ -94,7 +99,6 @@ impl Fuzzer {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_dir())
             .filter(|e| {
-                // Check exclude patterns
                 let path_str = e.path().to_string_lossy();
                 for pattern in &config.exclude_patterns {
                     if path_str.contains(pattern) {
@@ -169,8 +173,8 @@ impl FolderInfo {
         crate::utils::print_info(&format!("📁 Folder: {}", self.path));
         crate::utils::print_info(&format!("📄 Files: {}", self.file_count));
         crate::utils::print_info(&format!(
-            "💾 Size: {:.2} MB",
-            self.total_size as f64 / 1_048_576.0
+            "💾 Size: {}",
+            crate::utils::format_bytes(self.total_size)
         ));
     }
 }
@@ -187,7 +191,6 @@ mod tests {
             case_sensitive: false,
         };
 
-        // Test would need real filesystem, skip for now
         assert_eq!(config.exclude_patterns.len(), 2);
     }
 
@@ -199,5 +202,14 @@ mod tests {
         };
 
         assert!(!config.case_sensitive);
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = FuzzerConfig::default();
+
+        assert_eq!(config.max_depth, 5);
+        assert!(!config.case_sensitive);
+        assert!(config.exclude_patterns.contains(&".git".to_string()));
     }
 }

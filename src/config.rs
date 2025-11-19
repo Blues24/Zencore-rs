@@ -1,290 +1,215 @@
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
-use std::fs;
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
-use crate::fuzzer::FuzzerConfig;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Config {
-    #[serde(default = "default_algorithm")]
-    pub default_algorithm: String,
-
-    #[serde(default = "default_date_format")]
-    pub date_format: String,
-
-    #[serde(default = "default_music_folders")]
-    pub music_folders: Vec<String>,
-
-    #[serde(default = "default_backup_folders")]
-    pub backup_folders: Vec<String>,
-
-    #[serde(default)]
-    pub default_backup_destination: String,
-
-    #[serde(default)]
-    pub encrypt_by_default: bool,
-
-    #[serde(default = "default_cipher")]
-    pub default_cipher: String,
-
-    #[serde(default = "default_hash_algorithm")]
-    pub default_hash_algorithm: String,
-
-    #[serde(default)]
-    pub num_threads: usize,
-
-    #[serde(default)]
-    pub compression_level: Option<i32>,
-
-    #[serde(default = "default_true")]
-    pub generate_checksum_file: bool,
-
-    #[serde(default = "default_true")]
-    pub verify_after_backup: bool,
-
-    #[serde(default)]
-    pub remote: Option<RemoteConfig>,
-
-    #[serde(default)]
-    pub fuzzer: Option<FuzzerSettings>,
-    
-    #[serde(default = "default_true")]
-    pub sort_files_by_size: bool,
-    
-    #[serde(default)]
-    pub naming_presets: Option<Vec<NamingPreset>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RemoteConfig {
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(default)]
-    pub auto_upload: bool,
-
-    #[serde(default)]
-    pub rclone: Option<RcloneConfig>,
-
-    #[serde(default)]
-    pub database: Option<DatabaseConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RcloneConfig {
-    pub remote_name: String,
-    pub remote_path: String,
-
-    #[serde(default = "default_true")]
-    pub verify_after_upload: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DatabaseConfig {
-    pub host: String,
-
-    #[serde(default = "default_mysql_port")]
-    pub port: u16,
-
-    pub username: String,
-
-    #[serde(skip_serializing)]
-    pub password: Option<String>,
-
-    pub database: String,
-
-    #[serde(default = "default_table_name")]
-    pub table: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FuzzerSettings {
-    #[serde(default = "default_max_depth")]
+#[derive(Clone)]
+pub struct FuzzerConfig {
     pub max_depth: usize,
-
-    #[serde(default = "default_exclude_patterns")]
     pub exclude_patterns: Vec<String>,
-
-    #[serde(default)]
     pub case_sensitive: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct NamingPreset {
-    pub name: String,
-    pub template: String,
-    pub description: String,
-}
-
-fn default_algorithm() -> String {
-    "tar.zst".to_string()
-}
-
-fn default_date_format() -> String {
-    "%Y%m%d_%H%M%S".to_string()
-}
-
-fn default_music_folders() -> Vec<String> {
-    vec![
-        "~/Music".to_string(),
-        "~/Documents/Music".to_string(),
-    ]
-}
-
-fn default_backup_folders() -> Vec<String> {
-    vec![
-        "~/Backups".to_string(),
-        "~/Documents/Backups".to_string(),
-    ]
-}
-
-fn default_cipher() -> String {
-    "aes256".to_string()
-}
-
-fn default_hash_algorithm() -> String {
-    "sha256".to_string()
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_mysql_port() -> u16 {
-    3306
-}
-
-fn default_table_name() -> String {
-    "backups".to_string()
-}
-
-fn default_max_depth() -> usize {
-    5
-}
-
-fn default_exclude_patterns() -> Vec<String> {
-    vec![
-        ".git".to_string(),
-        "node_modules".to_string(),
-        ".cache".to_string(),
-        "target".to_string(),
-    ]
-}
-
-impl Default for Config {
+impl Default for FuzzerConfig {
     fn default() -> Self {
         Self {
-            default_algorithm: default_algorithm(),
-            date_format: default_date_format(),
-            music_folders: default_music_folders(),
-            backup_folders: default_backup_folders(),
-            default_backup_destination: String::new(),
-            encrypt_by_default: false,
-            default_cipher: default_cipher(),
-            default_hash_algorithm: default_hash_algorithm(),
-            num_threads: 0,
-            compression_level: None,
-            generate_checksum_file: true,
-            verify_after_backup: true,
-            remote: None,
-            fuzzer: Some(FuzzerSettings {
-                max_depth: default_max_depth(),
-                exclude_patterns: default_exclude_patterns(),
-                case_sensitive: false,
-            }),
-            naming_presets: Some(vec![
-                NamingPreset {
-                    name: "Daily Backup".to_string(),
-                    template: "daily_{date}".to_string(),
-                    description: "Daily backup with timestamp".to_string(),
-                },
-                NamingPreset {
-                    name: "Source + Date".to_string(),
-                    template: "{source}_{date}".to_string(),
-                    description: "Source folder name with date".to_string(),
-                },
-                NamingPreset {
-                    name: "Production".to_string(),
-                    template: "prod_{source}_{year}{month}{day}".to_string(),
-                    description: "Production backup format".to_string(),
-                },
-            ]),
+            max_depth: 5,
+            exclude_patterns: vec![
+                ".git".to_string(),
+                "node_modules".to_string(),
+                ".cache".to_string(),
+                "target".to_string(),
+                "tmp".to_string(),
+                "temp".to_string(),
+                "__pycache__".to_string(),
+                ".venv".to_string(),
+                "venv".to_string(),
+            ],
+            case_sensitive: false,
         }
     }
 }
 
-impl Config {
-    pub fn load() -> Result<Self> {
-        let config_path = Self::config_path()?;
+pub struct Fuzzer;
 
-        if !config_path.exists() {
-            let config = Self::default();
-            config.save()?;
-            return Ok(config);
+impl Fuzzer {
+    pub fn find_and_select(base_paths: &[String], target: &str) -> Result<PathBuf> {
+        Self::find_and_select_with_config(base_paths, target, FuzzerConfig::default())
+    }
+
+    pub fn find_and_select_with_config(
+        base_paths: &[String],
+        target: &str,
+        config: FuzzerConfig,
+    ) -> Result<PathBuf> {
+        crate::utils::print_info(&format!("🔍 Searching for {} folders...", target));
+        
+        let mut folders_found = Vec::new();
+
+        for base in base_paths {
+            let expanded = shellexpand::tilde(base).to_string();
+            let folders = Self::find_target_folders_with_config(&expanded, target, &config);
+            folders_found.extend(folders);
         }
 
-        let content = fs::read_to_string(&config_path)
-            .context("Failed to read config file")?;
-
-        if config_path.extension().and_then(|s| s.to_str()) == Some("json") {
-            serde_json::from_str(&content).context("Failed to parse JSON config")
-        } else {
-            toml::from_str(&content).context("Failed to parse TOML config")
-        }
-    }
-
-    pub fn save(&self) -> Result<()> {
-        let config_path = Self::config_path()?;
-
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)?;
+        if folders_found.is_empty() {
+            return Err(anyhow::anyhow!("No {} folders found", target));
         }
 
-        let content = toml::to_string_pretty(self)?;
-        fs::write(&config_path, content)?;
+        folders_found.sort();
+        folders_found.dedup();
 
-        Ok(())
+        if folders_found.len() == 1 {
+            crate::utils::print_info(&format!(
+                "Auto-selected: {}",
+                folders_found[0].display()
+            ));
+            return Ok(folders_found[0].clone());
+        }
+
+        crate::utils::print_success(&format!("Found {} folders", folders_found.len()));
+
+        let choices: Vec<String> = folders_found
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("Select {} folder", target))
+            .items(&choices)
+            .default(0)
+            .interact()
+            .context("Selection cancelled")?;
+
+        Ok(folders_found[selection].clone())
     }
 
-    pub fn config_path() -> Result<PathBuf> {
-        let proj_dirs = ProjectDirs::from("com", "Blues24", "zencore")
-            .context("Failed to determine config dir")?;
-
-        Ok(proj_dirs.config_dir().join("config.toml"))
+    pub fn find_target_folders(base: &str, target: &str) -> Vec<PathBuf> {
+        Self::find_target_folders_with_config(base, target, &FuzzerConfig::default())
     }
 
-    pub fn state_dir() -> Result<PathBuf> {
-        let proj_dirs = ProjectDirs::from("com", "Blues24", "zencore")
-            .context("Failed to determine state dir")?;
-
-        Ok(proj_dirs.data_dir().to_path_buf())
+    pub fn find_target_folders_with_config(
+        base: &str,
+        target: &str,
+        config: &FuzzerConfig,
+    ) -> Vec<PathBuf> {
+        WalkDir::new(base)
+            .max_depth(config.max_depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_dir())
+            .filter(|e| {
+                let path_str = e.path().to_string_lossy();
+                for pattern in &config.exclude_patterns {
+                    if path_str.contains(pattern) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|s| {
+                        if config.case_sensitive {
+                            s == target
+                        } else {
+                            s.to_lowercase() == target.to_lowercase()
+                        }
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|e| e.path().to_path_buf())
+            .collect()
     }
 
-    pub fn get_fuzzer_config(&self) -> FuzzerConfig {
-        if let Some(ref fuzzer) = self.fuzzer {
-            FuzzerConfig {
-                max_depth: fuzzer.max_depth,
-                exclude_patterns: fuzzer.exclude_patterns.clone(),
-                case_sensitive: fuzzer.case_sensitive,
+    pub fn count_files(path: &str) -> Result<usize> {
+        let count = WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .count();
+
+        Ok(count)
+    }
+
+    pub fn estimate_size(path: &str) -> Result<u64> {
+        let mut total_size = 0u64;
+
+        for entry in WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            if let Ok(metadata) = entry.metadata() {
+                total_size += metadata.len();
             }
-        } else {
-            FuzzerConfig::default()
         }
+
+        Ok(total_size)
     }
 
-    pub fn get_naming_presets(&self) -> Vec<(String, String)> {
-        if let Some(ref presets) = self.naming_presets {
-            presets
-                .iter()
-                .map(|p| (p.name.clone(), p.template.clone()))
-                .collect()
-        } else {
-            vec![
-                ("Default".to_string(), "{date}".to_string()),
-                ("Source + Date".to_string(), "{source}_{date}".to_string()),
-            ]
-        }
+    pub fn get_folder_info(path: &str) -> Result<FolderInfo> {
+        let file_count = Self::count_files(path)?;
+        let total_size = Self::estimate_size(path)?;
+
+        Ok(FolderInfo {
+            path: path.to_string(),
+            file_count,
+            total_size,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct FolderInfo {
+    pub path: String,
+    pub file_count: usize,
+    pub total_size: u64,
+}
+
+impl FolderInfo {
+    pub fn display(&self) {
+        crate::utils::print_info(&format!("📁 Folder: {}", self.path));
+        crate::utils::print_info(&format!("📄 Files: {}", self.file_count));
+        crate::utils::print_info(&format!(
+            "💾 Size: {}",
+            crate::utils::format_bytes(self.total_size)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exclude_patterns() {
+        let config = FuzzerConfig {
+            max_depth: 3,
+            exclude_patterns: vec![".git".to_string(), "node_modules".to_string()],
+            case_sensitive: false,
+        };
+
+        assert_eq!(config.exclude_patterns.len(), 2);
+    }
+
+    #[test]
+    fn test_case_sensitivity() {
+        let config = FuzzerConfig {
+            case_sensitive: false,
+            ..Default::default()
+        };
+
+        assert!(!config.case_sensitive);
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = FuzzerConfig::default();
+
+        assert_eq!(config.max_depth, 5);
+        assert!(!config.case_sensitive);
+        assert!(config.exclude_patterns.contains(&".git".to_string()));
     }
 }

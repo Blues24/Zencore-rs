@@ -3,15 +3,14 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
 use std::io;
+use std::path::{Path, PathBuf};
 use tar::Builder;
 use walkdir::WalkDir;
+use zip::unstable::write::FileOptionsExt;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
-
-// Struct for Archiver 
 pub struct Archiver {
     source: PathBuf,
     destination: PathBuf,
@@ -19,7 +18,8 @@ pub struct Archiver {
     algorithm: String,
     num_threads: usize,
     compression_level: Option<i32>,
-    password: Option<String>, // for zip encryption
+    password: Option<String>,
+    sort_by_size: bool,
 }
 
 impl Archiver {
@@ -37,35 +37,42 @@ impl Archiver {
             num_threads: 0,
             compression_level: None,
             password: None,
+            sort_by_size: true,
         }
     }
 
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.num_threads = threads;
-        self 
+        self
     }
 
     pub fn with_compression_level(mut self, level: i32) -> Self {
         self.compression_level = Some(level);
-        self 
-    }
-    pub fn with_password(mut self, password: String) -> Self {
-        self.password = Some(password);
-        self 
+        self
     }
 
-    pub fn compress(&self) -> Result<(PathBuf, Vec<String>)>{
+    pub fn with_password(mut self, password: String) -> Self {
+        self.password = Some(password);
+        self
+    }
+
+    pub fn with_size_sorting(mut self, enabled: bool) -> Self {
+        self.sort_by_size = enabled;
+        self
+    }
+
+    pub fn compress(&self) -> Result<(PathBuf, Vec<String>)> {
         let archive_path = self.destination.join(&self.archive_name);
 
         crate::utils::print_info(&format!(
-                "Compressing with {} algorithm... Please wait!",
-                self.algorithm 
+            "Compressing with {} algorithm...",
+            self.algorithm
         ));
 
         let num_threads = if self.num_threads == 0 {
             num_cpus::get()
         } else {
-            self.num_threads 
+            self.num_threads
         };
 
         rayon::ThreadPoolBuilder::new()
@@ -73,14 +80,32 @@ impl Archiver {
             .build_global()
             .ok();
 
-        crate::utils::print_info(&format!("Using this much {} threads", num_threads));
+        crate::utils::print_info(&format!("Using {} threads", num_threads));
 
         if let Some(level) = self.compression_level {
             crate::utils::print_info(&format!("Compression level: {}", level));
-
         }
-        
-        let files = self.collect_files_parallel()?;
+
+        let mut files = self.collect_files_parallel()?;
+
+        if self.sort_by_size {
+            crate::utils::print_info("Sorting files by size (largest first)...");
+            
+            let mut files_with_sizes: Vec<(PathBuf, u64)> = files
+                .par_iter()
+                .filter_map(|path| {
+                    fs::metadata(path)
+                        .ok()
+                        .map(|meta| (path.clone(), meta.len()))
+                })
+                .collect();
+
+            files_with_sizes.par_sort_by(|a, b| b.1.cmp(&a.1));
+            files = files_with_sizes.into_iter().map(|(path, _)| path).collect();
+
+            crate::utils::print_success("Files sorted by size");
+        }
+
         let total_files = files.len() as u64;
 
         let pb = ProgressBar::new(total_files);
@@ -94,28 +119,33 @@ impl Archiver {
         let file_list = match self.algorithm.as_str() {
             "tar.gz" | "gz" => {
                 if self.password.is_some() {
-                    crate::utils::print_warning("Tar.gz doesn't support built-in password protection");
-                    crate::utils::print_warning("Please use zip if you want to use password protection");
+                    crate::utils::print_warning(
+                        "tar.gz doesn't support built-in password protection",
+                    );
+                    crate::utils::print_warning("Use zip format for native encryption");
                 }
                 self.compress_tar_gz(&archive_path, &files, &pb)?
             }
             "tar.zst" | "zst" => {
-                if self.password.is_some(){
-                    crate::utils::print_warning("Tar.zst doesn't support built-in password protection");
-                    crate::utils::print_warning("Please use zip if you want to use password protection");
+                if self.password.is_some() {
+                    crate::utils::print_warning(
+                        "tar.zst doesn't support built-in password protection",
+                    );
+                    crate::utils::print_warning("Use zip format for native encryption");
                 }
-                self.compress_tar_zst(&archive_path, &files, &pb);
+                self.compress_tar_zst(&archive_path, &files, &pb)?
             }
             "zip" => self.compress_zip(&archive_path, &files, &pb)?,
             _ => return Err(anyhow::anyhow!("Unsupported algorithm: {}", self.algorithm)),
         };
 
-        pb.finish_with_message("Done! Thank you for your patience :D");
+        pb.finish_with_message("Done!");
+
         Ok((archive_path, file_list))
     }
 
     fn collect_files_parallel(&self) -> Result<Vec<PathBuf>> {
-        crate::utils::print_info("Scanning target directory...");
+        crate::utils::print_info("Scanning directory...");
 
         let entries: Vec<_> = WalkDir::new(&self.source)
             .into_iter()
@@ -132,15 +162,15 @@ impl Archiver {
 
     fn compress_tar_gz(
         &self,
-        archive_path: &path,
+        archive_path: &Path,
         files: &[PathBuf],
         pb: &ProgressBar,
     ) -> Result<Vec<String>> {
         let tar_gz = File::create(archive_path)?;
-        let level = self.compression_level.unwrap_or(8);
+        let level = self.compression_level.unwrap_or(6);
         let compression = Compression::new(level as u32);
         let enc = GzEncoder::new(tar_gz, compression);
-        let mut tar_Archive = Builder::new(enc);
+        let mut tar = Builder::new(enc);
 
         let mut file_list = Vec::with_capacity(files.len());
 
@@ -151,10 +181,9 @@ impl Archiver {
             file_list.push(relative.to_string_lossy().to_string());
             pb.inc(1);
             pb.set_message(relative.to_string_lossy().to_string());
-
         }
 
-        tar_Archive.finish()?;
+        tar.finish()?;
         Ok(file_list)
     }
 
@@ -165,7 +194,7 @@ impl Archiver {
         pb: &ProgressBar,
     ) -> Result<Vec<String>> {
         let tar_zst = File::create(archive_path)?;
-        let level = self.compression_level.unwrap_or(4);
+        let level = self.compression_level.unwrap_or(3);
         let encoder = ZstdEncoder::new(tar_zst, level)?;
         let mut tar = Builder::new(encoder.auto_finish());
 
@@ -176,7 +205,6 @@ impl Archiver {
             tar.append_path_with_name(file_path, relative)?;
 
             file_list.push(relative.to_string_lossy().to_string());
-            // add progress by one
             pb.inc(1);
             pb.set_message(relative.to_string_lossy().to_string());
         }
@@ -194,18 +222,18 @@ impl Archiver {
         let zip_file = File::create(archive_path)?;
         let mut zip = zip::ZipWriter::new(zip_file);
 
-        let level = self.compression_level.unwrap_or(8) as i32;
+        let level = self.compression_level.unwrap_or(6);
         let options = if let Some(ref password) = self.password {
             crate::utils::print_info("Encrypting with AES-256 (ZIP native)...");
 
             zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
-                .compression_level(Some(level))
+                .compression_level(Some(level as i64))
                 .with_deprecated_encryption(password.as_bytes())
         } else {
             zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
-                .comression_level(Some(level))
+                .compression_level(Some(level as i64))
         };
 
         let mut file_list = Vec::with_capacity(files.len());
@@ -215,18 +243,18 @@ impl Archiver {
             let name = relative.to_string_lossy().to_string();
 
             zip.start_file(&name, options)?;
-            let mut fill = File::open(file_path)?;
-            io::copy(&mut fill, &mut zip)?;
+            let mut f = File::open(file_path)?;
+            io::copy(&mut f, &mut zip)?;
 
             file_list.push(name.clone());
             pb.inc(1);
             pb.set_message(name);
         }
 
-        zip.finsih()?;
+        zip.finish()?;
 
-        if self.password.is_some(){
-            crate::utils::print_success("✓ Archive encrypted with password, yeay!...");
+        if self.password.is_some() {
+            crate::utils::print_success("✓ Archive encrypted with password");
         }
 
         Ok(file_list)
