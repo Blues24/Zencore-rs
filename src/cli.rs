@@ -19,7 +19,7 @@ use crate::{
 #[derive(Parser)]
 #[command(name = "zencore")]
 #[command(author = "Blues24")]
-#[command(version = "1.3.1 - Oswin")]
+#[command(version = "1.3.1 - Oswin Oswald")]
 #[command(about = "🎶 Blues Zencore - Minimalist Music Backup Tool", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
@@ -429,23 +429,32 @@ impl Cli {
         }
 
         // POST-COMPRESSION ENCRYPTION (TAR formats)
-        let encrypted = if should_encrypt && password.is_some(){
-            if algo == "zip"{
-                utils::print_info("Applying ZIP native encryption..."); 
+        let encrypted = if should_encrypt && password.is_some() {
+            if algo == "zip" {
+                utils::print_info("✓ ZIP native encryption applied during compression");
+                true
             } else {
                 utils::print_info("Applying age encryption to TAR...");
 
-                let encryptor = crate::encrypt_tar::TarEncryptor::new(password.unwrap());
-                encryptor.encrypt_file(archive_path.to_str().unwrap())?;
-
-                if config.generate_checksum_file {
-                    utils::print_info("Updating checksum for encrypted archive..");
-                    Checker::generate_checksum_file(archive_path.to_str().unwrap())?;
+                let pwd = password.unwrap();
+                let encryptor = crate::encrypt_tar::TarEncryptor::new(pwd);
+        
+                match encryptor.encrypt_file(archive_path.to_str().unwrap()) {
+                    Ok(_) => {
+                        if config.generate_checksum_file {
+                            utils::print_info("Updating checksum for encrypted archive...");
+                            let _ = Checker::generate_checksum_file(archive_path.to_str().unwrap());
+                        }
+                        true
+                    }
+                    Err(e) => {
+                    utils::print_error(&format!("Encryption failed: {}", e));
+                    false
+                    }
                 }
-                 
-            } else {
-                utils::print_warning("No file needed to be encrypted");
-            };
+            }
+        } else {
+            false
         };
         // VERIFY IF ENABLED
         if config.verify_after_backup {

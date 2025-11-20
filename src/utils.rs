@@ -34,7 +34,7 @@ pub fn show_banner() {
  ╚══════╝╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
 
     🎵 Minimalist Music Backup Tool - Fast, Secure, Beautiful 🎵
-              v1.3.1 - Rust Edition - Codename Oswin                                                                                                                                                                                                                                         
+              v1.3.1 - Rust Edition - Codename Oswin Oswald                                                                                                                                                                                                                                        
     "#;
 
     println!("{}", banner.bright_blue());

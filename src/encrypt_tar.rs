@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use age::{armor::ArmoredWriter, Encryptor as RageEncryptor};
-use secrecy::SecretString;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 
@@ -15,7 +13,7 @@ impl TarEncryptor {
     }
 
     pub fn encrypt_file(&self, tar_path: &str) -> Result<String> {
-        crate::utils::print_info("🔒 Encrypting TAR with age encryption...");
+        crate::utils::print_info("🔒 Encrypting TAR with age...");
 
         let file_size = fs::metadata(tar_path)?.len();
         let encrypted_path = format!("{}.age", tar_path);
@@ -27,23 +25,26 @@ impl TarEncryptor {
                 .unwrap()
                 .progress_chars("█▓░"),
         );
-        pb.set_message("Encrypting with rage...");
+        pb.set_message("Encrypting...");
 
-        let passphrase = self.password.as_str();
+        let passphrase = secrecy::SecretString::from(self.password.clone());
         
-        let encryptor = RageEncryptor::with_user_passphrase(
-            SecretString::from(passphrase.to_string())
-        );
+        let encryptor = age::Encryptor::with_user_passphrase(passphrase);
 
         let input_file = File::open(tar_path)?;
         let output_file = File::create(&encrypted_path)?;
 
         let mut input = BufReader::new(input_file);
-        let armor = ArmoredWriter::wrap_output(output_file)?;
         
-        let mut encrypted = encryptor
-            .wrap_output(armor)
-            .context("Failed to create encrypted output")?;
+        let armor_output = age::armor::ArmoredWriter::wrap_output(
+            output_file,
+            age::armor::Format::AsciiArmor
+            )
+            .context("Failed to create armored writer")?;
+        
+        let mut encrypted_writer = encryptor
+            .wrap_output(armor_output)
+            .context("Failed to create encrypted writer")?;
 
         let mut buffer = [0u8; 65536];
         let mut total_read = 0u64;
@@ -54,31 +55,32 @@ impl TarEncryptor {
                 break;
             }
 
-            encrypted.write_all(&buffer[..count])?;
+            encrypted_writer.write_all(&buffer[..count])?;
             total_read += count as u64;
             pb.set_position(total_read);
         }
 
-        encrypted.finish()?;
-        pb.finish_with_message("✓ Encryption complete");
+        encrypted_writer
+            .finish()
+            .and_then(|w| w.finish())
+            .context("Failed to finalize encryption")?;
+        
+        pb.finish_with_message("✓ Encrypted");
 
         let backup_path = format!("{}.bak", tar_path);
         fs::rename(tar_path, &backup_path)?;
         fs::rename(&encrypted_path, tar_path)?;
 
         crate::utils::print_success(&format!(
-            "Encrypted with age ({:.2} MB)",
+            "Encrypted: {:.2} MB",
             file_size as f64 / 1_048_576.0
         ));
-        crate::utils::print_info("💡 Compatible with 'age' CLI tool for decryption");
 
         Ok(tar_path.to_string())
     }
 
     pub fn decrypt_file(&self, encrypted_path: &str) -> Result<String> {
-        crate::utils::print_info("🔓 Decrypting age-encrypted file...");
-
-        use age::Decryptor as RageDecryptor;
+        crate::utils::print_info("🔓 Decrypting age file...");
 
         let file_size = fs::metadata(encrypted_path)?.len();
         let decrypted_path = encrypted_path.trim_end_matches(".age");
@@ -93,17 +95,16 @@ impl TarEncryptor {
         pb.set_message("Decrypting...");
 
         let input_file = File::open(encrypted_path)?;
-        let mut input = BufReader::new(input_file);
+        let input = BufReader::new(input_file);
 
-        let decryptor = match RageDecryptor::new(&mut input)? {
-            RageDecryptor::Passphrase(d) => d,
-            _ => return Err(anyhow::anyhow!("Not a passphrase-encrypted file")),
-        };
+        let decryptor = age::Decryptor::new(input)?;
 
         let passphrase = secrecy::SecretString::from(self.password.clone());
-        let mut decrypted = decryptor
-            .decrypt(&passphrase, None)?
-            .context("Failed to decrypt - wrong password?")?;
+        let identity = age::scrypt::Identity::new(passphrase);
+
+        let mut decrypted_reader = decryptor
+            .decrypt(std::iter::once(&identity as &dyn age::Identity))
+            .context("Decryption failed - wrong password or corrupted file")?;
 
         let output_file = File::create(decrypted_path)?;
         let mut output = BufWriter::new(output_file);
@@ -112,7 +113,7 @@ impl TarEncryptor {
         let mut total_read = 0u64;
 
         loop {
-            let count = decrypted.read(&mut buffer)?;
+            let count = decrypted_reader.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
@@ -123,9 +124,9 @@ impl TarEncryptor {
         }
 
         output.flush()?;
-        pb.finish_with_message("✓ Decryption complete");
+        pb.finish_with_message("✓ Decrypted");
 
-        crate::utils::print_success("File decrypted successfully");
+        crate::utils::print_success("Decryption complete");
 
         Ok(decrypted_path.to_string())
     }
@@ -153,30 +154,32 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn test_encrypt_decrypt_roundtrip() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    fn test_encrypt_decrypt_roundtrip() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
         let test_file = temp_dir.path().join("test.tar");
 
-        let mut file = File::create(&test_file).unwrap();
-        file.write_all(b"Test data for encryption").unwrap();
+        let mut file = File::create(&test_file)?;
+        file.write_all(b"Test data for encryption")?;
         drop(file);
 
-        let encryptor = TarEncryptor::new("test_password".to_string());
+        let encryptor = TarEncryptor::new("test_password_123".to_string());
 
-        let encrypted = encryptor
-            .encrypt_file(test_file.to_str().unwrap())
-            .unwrap();
+        let encrypted = encryptor.encrypt_file(test_file.to_str().unwrap())?;
         assert!(TarEncryptor::is_age_encrypted(&encrypted));
 
-        let decrypted = encryptor.decrypt_file(&encrypted).unwrap();
-
-        let content = fs::read_to_string(&decrypted).unwrap();
+        let decrypted = encryptor.decrypt_file(&encrypted)?;
+        let content = fs::read_to_string(&decrypted)?;
+        
         assert_eq!(content, "Test data for encryption");
+
+        Ok(())
     }
 
     #[test]
     fn test_is_age_encrypted() {
-        assert!(TarEncryptor::is_age_encrypted("backup.tar.zst.age"));
+        assert!(TarEncryptor::is_age_encrypted("backup.tar.age"));
+        assert!(TarEncryptor::is_age_encrypted("file.tar.zst.age"));
         assert!(!TarEncryptor::is_age_encrypted("backup.tar.zst"));
+        assert!(!TarEncryptor::is_age_encrypted("backup.tar.gz"));
     }
 }
