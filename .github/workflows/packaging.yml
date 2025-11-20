@@ -1,6 +1,10 @@
 name: Package DEB & RPM
 
 on:
+  workflow_dispatch:
+        inputs:
+          logLevel:
+            description: 'Ready to be packaged!'
   workflow_run:
     workflows: ["Zencore-rs Linux and Windows Release Action"]  # nama workflow release
     types:
