@@ -1,10 +1,6 @@
 name: Package DEB & RPM
 
 on:
-  workflow_dispatch:
-        inputs:
-          logLevel:
-            description: 'Ready to be packaged!'
   workflow_run:
     workflows: ["Zencore-rs Linux and Windows Release Action"]  # nama workflow release
     types:
@@ -52,14 +48,14 @@ jobs:
 
           cat <<EOF > deb/DEBIAN/control
           Package: zencore-rs
-          Version: ${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.codename }}
+          Version: 1.3
           Architecture: amd64
           Maintainer: Blues
           Description: Zencore-rs CLI tool
           EOF
 
           dpkg-deb --build deb \
-            zencore-rs_${{ steps.meta.outputs.version }}_${{ steps.meta.outputs.codename }}_amd64.deb
+            zencore-rs_amd64.deb
 
       ###########################################
       # BUILD RPM PACKAGE
@@ -73,7 +69,7 @@ jobs:
 
           cat <<EOF > rpmbuild/SPECS/zencore-rs.spec
           Name: zencore-rs
-          Version: ${{ steps.meta.outputs.version }}
+          Version: 1.3
           Release: ${{ steps.meta.outputs.codename }}
           Summary: Zencore-rs CLI tool
           License: MIT
@@ -96,7 +92,7 @@ jobs:
           rpmbuild -ba rpmbuild/SPECS/zencore-rs.spec
 
           cp rpmbuild/RPMS/x86_64/*.rpm \
-            zencore-rs-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.codename }}-1.x86_64.rpm
+            zencore-rs-1-3-1.x86_64.rpm
 
       ###########################################
       # UPLOAD TO RELEASE
