@@ -7,8 +7,10 @@ use argon2::{
     password_hash::{rand_core::RngCore, PasswordHasher, SaltString},
     Argon2, Params, Version,
 };
+use blake3;
 use indicatif::{ProgressBar, ProgressStyle};
-use sha2::{Digest, Sha256};
+use sha2::{Digest as Sha2Digest, Sha256};
+use sha3::Sha3_256;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
@@ -23,22 +25,14 @@ impl Encryptor {
     }
 
     fn derive_key(&self, pb: &ProgressBar) -> Result<([u8; 32], SaltString)> {
-        pb.set_message("🔑 Deriving encryption key (fast mode)...");
+        pb.set_message("🔑 Deriving encryption key...");
         
         let salt = SaltString::generate(&mut OsRng);
         
-        let params = Params::new(
-            32768,    // 32 MB memory (was 1 GB by default!)
-            3,        // 3 iterations (was 10 by default!)
-            1,        // 1 thread
-            None
-        ).map_err(|e| anyhow::anyhow!("Failed to create Argon2 params: {}", e))?;
+        let params = Params::new(32768, 3, 1, None)
+            .map_err(|e| anyhow::anyhow!("Failed to create Argon2 params: {}", e))?;
         
-        let argon2 = Argon2::new(
-            argon2::Algorithm::Argon2id,
-            Version::V0x13,
-            params
-        );
+        let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
 
         let password_hash = argon2
             .hash_password(self.password.as_bytes(), &salt)
@@ -50,47 +44,45 @@ impl Encryptor {
         let mut key = [0u8; 32];
         key.copy_from_slice(&hash_bytes[..32]);
 
-        pb.set_message("✓ Key derived successfully");
+        pb.set_message("✓ Key derived");
 
         Ok((key, salt))
     }
 
     pub fn encrypt_file(&self, file_path: &str) -> Result<String> {
-        crate::utils::print_info("🔐 Starting encryption with AES-256-GCM...");
+        crate::utils::print_info("🔒 Encrypting the file...");
 
         let file_size = fs::metadata(file_path)?.len();
         
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% {msg}")
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}% {msg}")
                 .unwrap()
-                .progress_chars("█▓▒░-"),
+                .progress_chars("█▓░"),
         );
 
-        pb.set_position(0);
+        pb.set_position(10);
         pb.set_message("Reading file...");
         let plaintext = fs::read(file_path)?;
-        pb.set_position(20);
-
-        pb.set_message("Deriving encryption key...");
+        
+        pb.set_position(30);
         let (key, salt) = self.derive_key(&pb)?;
-        pb.set_position(40);
-
-        pb.set_message("Initializing cipher...");
+        
+        pb.set_position(50);
+        pb.set_message("Encrypting...");
         let cipher = Aes256Gcm::new_from_slice(&key)?;
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        pb.set_position(50);
-
-        pb.set_message("Encrypting data...");
+        
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_ref())
             .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
+        
         pb.set_position(80);
-
-        pb.set_message("Writing encrypted file...");
+        pb.set_message("Writing...");
+        
         let backup_path = format!("{}.bak", file_path);
         fs::rename(file_path, &backup_path)?;
 
@@ -98,12 +90,11 @@ impl Encryptor {
         encrypted_file.write_all(salt.as_str().as_bytes())?;
         encrypted_file.write_all(&nonce_bytes)?;
         encrypted_file.write_all(&ciphertext)?;
-        pb.set_position(100);
-
-        pb.finish_with_message("✓ Encryption complete!");
+        
+        pb.finish_with_message("✓ Done!");
 
         crate::utils::print_success(&format!(
-            "File encrypted successfully ({:.2} MB)",
+            "Encrypted ({:.2} MB)",
             file_size as f64 / 1_048_576.0
         ));
 
@@ -111,40 +102,131 @@ impl Encryptor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashAlgorithm {
+    Sha256,
+    Sha3_256,
+    Blake3,
+}
+
+impl HashAlgorithm {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "sha256" | "sha-256" => Ok(Self::Sha256),
+            "sha3" | "sha3-256" => Ok(Self::Sha3_256),
+            "blake3" => Ok(Self::Blake3),
+            _ => Err(anyhow::anyhow!("Unknown algorithm: {}", s)),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Sha256 => "SHA-256",
+            Self::Sha3_256 => "SHA3-256",
+            Self::Blake3 => "BLAKE3",
+        }
+    }
+
+    pub fn all() -> Vec<Self> {
+        vec![Self::Sha256, Self::Sha3_256, Self::Blake3]
+    }
+}
+
 pub struct Checker;
 
 impl Checker {
     pub fn generate_checksum(file_path: &str) -> Result<String> {
+        Self::generate_checksum_with_algorithm(file_path, HashAlgorithm::Sha256)
+    }
+
+    pub fn generate_checksum_with_algorithm(
+        file_path: &str,
+        algorithm: HashAlgorithm,
+    ) -> Result<String> {
         let file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
-        let mut reader = BufReader::new(file);
-        let mut hasher = Sha256::new();
-        let mut buffer = [0u8; 8192];
+        let mut reader = BufReader::with_capacity(65536, file);
 
         let pb = ProgressBar::new(file_size);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg}")
                 .unwrap()
-                .progress_chars("█▓▒░-"),
+                .progress_chars("█▓░"),
         );
-        pb.set_message("Calculating SHA-256");
+        pb.set_message(format!("Calculating {}", algorithm.name()));
 
         let mut total_read = 0u64;
 
-        loop {
-            let count = reader.read(&mut buffer)?;
-            if count == 0 {
-                break;
+        match algorithm {
+            HashAlgorithm::Sha256 => {
+                let mut hasher = Sha256::new();
+                let mut buffer = [0u8; 65536];
+
+                loop {
+                    let count = reader.read(&mut buffer)?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                    total_read += count as u64;
+                    pb.set_position(total_read);
+                }
+
+                pb.finish_with_message("✓ SHA-256 done");
+                Ok(format!("{:x}", hasher.finalize()))
             }
-            hasher.update(&buffer[..count]);
-            total_read += count as u64;
-            pb.set_position(total_read);
+            HashAlgorithm::Sha3_256 => {
+                use sha3::Digest;
+                
+                let mut hasher = Sha3_256::new();
+                let mut buffer = [0u8; 65536];
+
+                loop {
+                    let count = reader.read(&mut buffer)?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                    total_read += count as u64;
+                    pb.set_position(total_read);
+                }
+
+                pb.finish_with_message("✓ SHA3-256 done");
+                Ok(format!("{:x}", hasher.finalize()))
+            }
+            HashAlgorithm::Blake3 => {
+                let mut hasher = blake3::Hasher::new();
+                let mut buffer = [0u8; 65536];
+
+                loop {
+                    let count = reader.read(&mut buffer)?;
+                    if count == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..count]);
+                    total_read += count as u64;
+                    pb.set_position(total_read);
+                }
+
+                pb.finish_with_message("✓ BLAKE3 done");
+                Ok(hasher.finalize().to_hex().to_string())
+            }
+        }
+    }
+
+    pub fn generate_multiple_checksums(
+        file_path: &str,
+        algorithms: &[HashAlgorithm],
+    ) -> Result<Vec<(HashAlgorithm, String)>> {
+        let mut results = Vec::with_capacity(algorithms.len());
+
+        for algo in algorithms {
+            let checksum = Self::generate_checksum_with_algorithm(file_path, *algo)?;
+            results.push((*algo, checksum));
         }
 
-        pb.finish_with_message("✓ Checksum complete");
-
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(results)
     }
 
     pub fn verify_checksum(file_path: &str, expected: &str) -> Result<bool> {
@@ -152,22 +234,30 @@ impl Checker {
         Ok(actual.eq_ignore_ascii_case(expected))
     }
 
+    pub fn verify_checksum_with_algorithm(
+        file_path: &str,
+        expected: &str,
+        algorithm: HashAlgorithm,
+    ) -> Result<bool> {
+        let actual = Self::generate_checksum_with_algorithm(file_path, algorithm)?;
+        Ok(actual.eq_ignore_ascii_case(expected))
+    }
+
     pub fn generate_checksum_file(archive_path: &str) -> Result<String> {
-        crate::utils::print_info("Generating checksum file...");
+        crate::utils::print_info("Generating .sha256 file...");
 
         let checksum = Self::generate_checksum(archive_path)?;
         let archive_name = Path::new(archive_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .context("Invalid archive path")?;
+            .context("Invalid path")?;
 
         let checksum_path = format!("{}.sha256", archive_path);
         let mut checksum_file = File::create(&checksum_path)?;
-
         writeln!(checksum_file, "{}  {}", checksum, archive_name)?;
 
         crate::utils::print_success(&format!(
-            "Checksum file created: {}",
+            "Created: {}",
             Path::new(&checksum_path)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -181,24 +271,20 @@ impl Checker {
         let checksum_path = format!("{}.sha256", archive_path);
 
         if !Path::new(&checksum_path).exists() {
-            return Err(anyhow::anyhow!("Checksum file not found: {}", checksum_path));
+            return Err(anyhow::anyhow!("Checksum file not found"));
         }
-
-        crate::utils::print_info("Reading checksum from file...");
 
         let content = fs::read_to_string(&checksum_path)?;
         let parts: Vec<&str> = content.trim().split_whitespace().collect();
 
         if parts.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid checksum file format"));
+            return Err(anyhow::anyhow!("Invalid checksum file"));
         }
 
-        let expected_checksum = parts[0];
+        let expected = parts[0];
+        let actual = Self::generate_checksum(archive_path)?;
 
-        crate::utils::print_info("Verifying archive integrity...");
-        let actual_checksum = Self::generate_checksum(archive_path)?;
-
-        Ok(actual_checksum.eq_ignore_ascii_case(expected_checksum))
+        Ok(actual.eq_ignore_ascii_case(expected))
     }
 
     pub fn auto_verify(archive_path: &str) -> Result<bool> {
@@ -207,7 +293,7 @@ impl Checker {
         if Path::new(&checksum_path).exists() {
             Self::verify_from_checksum_file(archive_path)
         } else {
-            crate::utils::print_warning("No checksum file found, skipping verification");
+            crate::utils::print_warning("No checksum file, skipping verification");
             Ok(true)
         }
     }

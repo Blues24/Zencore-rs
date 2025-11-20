@@ -3,17 +3,66 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use crate::config::Config;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ArchiveMetadata {
     pub name: String,
     pub created_at: String,
+
+    #[serde(default)]
     pub checksum: String,
+    #[serde(default)]
+    pub checksums: HashMap<String, String>,
+
     pub algorithm: String,
+
     pub size_bytes: u64,
     pub file_count: usize,
     pub encrypted: bool,
     pub contents: Vec<String>,
+}
+
+impl ArchiveMetadata {
+    pub fn get_checksum(&self, algorithm: &str) -> Option<&String> {
+        let algo_upper = algorithm.to_uppercase();
+
+        self.checksums.get(&algo_upper).or_else(|| {
+            if algo_upper == "SHA-256" || algo_upper == "SHA256" {
+                if !self.checksum.is_empty() {
+                    Some(&self.checksum)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn add_checksum(&mut self, algorithm: &str, hash: String) {
+        let algo_upper = algorithm.to_uppercase();
+        self.checksums.insert(algo_upper.clone(), hash.clone());
+
+        if algo_upper == "SHA256" || algo_upper == "SHA-256" {
+            self.checksum = hash;
+        }
+    }
+
+    pub fn list_checksums(&self) -> Vec<(String, String)> {
+        let mut result: Vec<(String, String)> = self
+            .checksums
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        if !self.checksum.is_empty() && !self.checksums.contains_key("SHA-256") {
+            result.push(("SHA-256".to_string(), self.checksum.clone()));
+        }
+
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -38,7 +87,21 @@ impl StateTracker {
         }
 
         let content = fs::read_to_string(state_path)?;
-        Ok(serde_json::from_str(&content)?)
+        let mut tracker: Self = serde_json::from_str(&content)?;
+
+        tracker.migrate_old_format();
+
+        Ok(tracker)
+    }
+
+    fn migrate_old_format(&mut self) {
+        for metadata in self.archives.values_mut() {
+            if !metadata.checksum.is_empty() && metadata.checksums.is_empty() {
+                metadata
+                    .checksums
+                    .insert("SHA-256".to_string(), metadata.checksum.clone());
+            }
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -63,10 +126,20 @@ impl StateTracker {
     }
 
     pub fn list_archives(&self) -> Vec<&ArchiveMetadata> {
-        self.archives.values().collect()
+        let mut archives: Vec<&ArchiveMetadata> = self.archives.values().collect();
+        archives.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        archives
+    }
+
+    pub fn remove_archive(&mut self, name: &str) -> Option<ArchiveMetadata> {
+        self.archives.remove(name)
+    }
+
+    pub fn archive_count(&self) -> usize {
+        self.archives.len()
     }
 
     fn state_file() -> Result<PathBuf> {
-        Ok(crate::config::Config::state_dir()?.join("archives.json"))
+        Ok(Config::state_dir()?.join("archives.json"))
     }
 }

@@ -1,16 +1,12 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::process::{Command, Stdio};
-use std::path::Path;
 use std::io::{BufRead, BufReader};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone)]
 pub enum RemoteDestination {
-    Rclone {
-        remote: String,
-        path: String,
-    },
+    Rclone { remote: String, path: String },
     Database {
         host: String,
         port: u16,
@@ -28,7 +24,13 @@ impl RemoteDestination {
         }
     }
 
-    pub fn from_database(host: &str, port: u16, username: &str, database: &str, table: &str) -> Self {
+    pub fn from_database(
+        host: &str,
+        port: u16,
+        username: &str,
+        database: &str,
+        table: &str,
+    ) -> Self {
         RemoteDestination::Database {
             host: host.to_string(),
             port,
@@ -67,28 +69,25 @@ impl RemoteTransfer {
         Ok(remotes)
     }
 
-    pub fn upload_to_rclone(
-        local_path: &str,
-        remote: &str,
-        remote_path: &str,
-    ) -> Result<()> {
+    pub fn upload_to_rclone(local_path: &str, remote: &str, remote_path: &str) -> Result<()> {
         crate::utils::print_info(&format!("📤 Uploading to {}:{}...", remote, remote_path));
 
         let file_size = std::fs::metadata(local_path)?.len();
         let file_name = Path::new(local_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("archive")
-            .to_string();
+            .unwrap_or("archive");
 
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% Uploading {msg}")
+                .template(
+                    "{spinner:.green} [{bar:40.cyan/blue}] {pos}% Uploading {msg}",
+                )
                 .unwrap()
-                .progress_chars("█▓▒░-"),
+                .progress_chars("█▓░-"),
         );
-        pb.set_message(file_name);
+        pb.set_message(file_name.to_string());
 
         let destination = format!("{}:{}", remote, remote_path);
 
@@ -106,12 +105,10 @@ impl RemoteTransfer {
 
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    if line.contains("Transferred:") {
-                        if let Some(percent) = Self::extract_progress(&line) {
-                            pb.set_position(percent as u64);
-                        }
+            for line in reader.lines().map_while(Result::ok) {
+                if line.contains("Transferred:") {
+                    if let Some(percent) = Self::extract_progress(&line) {
+                        pb.set_position(percent as u64);
                     }
                 }
             }
@@ -135,66 +132,42 @@ impl RemoteTransfer {
     }
 
     fn extract_progress(line: &str) -> Option<u8> {
-        if let Some(percent_str) = line.split(',').find(|s| s.contains('%')) {
-            let percent_str = percent_str.trim();
-            if let Some(num_str) = percent_str.split('%').next() {
-                if let Ok(num) = num_str.trim().parse::<u8>() {
-                    return Some(num);
-                }
-            }
-        }
-        None
+        line.split(',')
+            .find(|s| s.contains('%'))
+            .and_then(|percent_str| {
+                percent_str
+                    .split('%')
+                    .next()
+                    .and_then(|num_str| num_str.trim().parse::<u8>().ok())
+            })
     }
 
     pub fn upload_to_database(
         local_path: &str,
         host: &str,
         port: u16,
-        username: &str,
-        password: &str,
+        _username: &str,
+        _password: &str,
         database: &str,
         table: &str,
     ) -> Result<()> {
-        crate::utils::print_info(&format!(
-            "📤 Uploading to MySQL at {}:{}...",
-            host, port
-        ));
+        crate::utils::print_info(&format!("📤 Uploading to MySQL at {}:{}...", host, port));
 
-        let file_data = std::fs::read(local_path)?;
-        let file_name = Path::new(local_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("archive.tar.zst");
-        let file_size = file_data.len();
+        let file_size = std::fs::metadata(local_path)?.len();
 
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% {msg}")
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}% {msg}")
                 .unwrap()
-                .progress_chars("█▓▒░-"),
+                .progress_chars("█▓░-"),
         );
 
         pb.set_position(10);
         pb.set_message("Connecting to database...");
 
-        let connection_string = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            username, password, host, port, database
-        );
-
-        pb.set_position(30);
-        pb.set_message("Preparing data...");
-
-        let encoded_data = STANDARD.encode(&file_data);
-
         pb.set_position(50);
-        pb.set_message("Inserting into database...");
-
-        let query = format!(
-            "INSERT INTO {} (filename, filedata, filesize, upload_date) VALUES (?, ?, ?, NOW())",
-            table
-        );
+        pb.set_message("Preparing data...");
 
         pb.set_position(80);
         pb.set_message("Finalizing...");
@@ -212,7 +185,7 @@ impl RemoteTransfer {
         ));
 
         crate::utils::print_warning(
-            "⚠️  Note: MySQL driver not fully implemented. Use rclone for now."
+            "⚠️  Note: MySQL driver not fully implemented. Use rclone for now.",
         );
 
         Ok(())
