@@ -44,7 +44,7 @@ jobs:
         run: |
           mkdir -p deb/DEBIAN
           mkdir -p deb/usr/local/bin
-          cp target/release/zencore-rs deb/usr/local/bin/
+          cp target/release/zencore deb/usr/local/bin/
 
           cat <<EOF > deb/DEBIAN/control
           Package: zencore-rs
@@ -65,7 +65,7 @@ jobs:
           mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
           mkdir -p rpmbuild/SOURCES/bin
-          cp target/release/zencore-rs rpmbuild/SOURCES/bin/zencore-rs
+          cp target/release/zencore rpmbuild/SOURCES/bin/zencore-rs
 
           cat <<EOF > rpmbuild/SPECS/zencore-rs.spec
           Name: zencore-rs
